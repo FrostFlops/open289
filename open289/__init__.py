@@ -11,4 +11,4 @@ Modules:
   sim        - virtual IR3000 FC + Fluke 289 (tests, CI, trying the tool without hardware)
 Run the CLI with `python -m open289 --help`.
 """
-__version__ = "0.1.0"
+__version__ = "0.1.1"

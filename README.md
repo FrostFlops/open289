@@ -16,7 +16,7 @@ The meter is reached through the adapter's pass-through to the meter's own seria
 
 ## Status and tested hardware
 
-Version 0.1.0 (beta). What was verified on real hardware on 2026-11-06: an IR3000 FC with radio firmware 01.00.01 and
+Version 0.1.1 (beta). What was verified on real hardware on 2026-11-06: an IR3000 FC with radio firmware 01.00.01 and
 MSP firmware 01.00.15, a Fluke 289 with firmware V1.71, a Windows 11 PC with Intel Bluetooth (Python and bleak over
 WinRT).
 
@@ -613,7 +613,7 @@ CI (`ci.yml`, on pushes to main, pull requests and by hand): the tests on Window
 3.14, all against the virtual meter; a check that tracked files carry no local paths; a package build with `twine
 check --strict` and a smoke test of the built wheel (`open289 info`, `open289 live -n 5` on the virtual meter).
 
-Release (`release.yml`): push a tag `vX.Y.Z` equal to `open289.__version__` (`v0.1.0` for 0.1.0). The workflow runs the
+Release (`release.yml`): push a tag `vX.Y.Z` equal to `open289.__version__` (`v0.1.1` for 0.1.1). The workflow runs the
 CI checks, refuses a tag that does not match the version, builds, creates a GitHub release with the files, and
 publishes to PyPI by **trusted publishing** (no token). One-time setup on pypi.org: add a (pending) trusted
 publisher for the project `open289` with owner `FrostFlops`, repository `open289`, workflow `release.yml` and

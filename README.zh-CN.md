@@ -14,7 +14,7 @@
 
 ## 状态与已测试硬件
 
-版本 0.1.0（beta）。2026-11-06 在真实硬件上验证过的配置：一个无线电固件 01.00.01、MSP 固件 01.00.15 的 IR3000 FC，一台固件 V1.71 的 Fluke 289，以及一台使用 Intel 蓝牙的 Windows 11 电脑（Python 和 bleak，基于 WinRT）。
+版本 0.1.1（beta）。2026-11-06 在真实硬件上验证过的配置：一个无线电固件 01.00.01、MSP 固件 01.00.15 的 IR3000 FC，一台固件 V1.71 的 Fluke 289，以及一台使用 Intel 蓝牙的 Windows 11 电脑（Python 和 bleak，基于 WinRT）。
 
 - 只测试过 **289**。287 使用相同的协议，理应可用，但未经测试。
 - Linux 和 macOS：bleak 支持它们，且蓝牙路径中没有仅限 Windows 的代码，但从未在真实硬件上试过。CI 在 Linux 和 Windows 上运行全部测试，但只针对虚拟万用表（见[虚拟万用表](#虚拟万用表)）。
@@ -471,7 +471,7 @@ OPEN289_SIM=1 OPEN289_NO_BLE=1 python -m pytest tests -m "not hw" -q
 
 CI（`ci.yml`，在推送到 main、拉取请求以及手动触发时运行）：在 Windows 和 Linux 上用 Python 3.10、3.12 和 3.14 运行测试，全部针对虚拟万用表；检查受版本控制的文件中不含本地路径；用 `twine check --strict` 做包构建，并对构建出的 wheel 做冒烟测试（在虚拟万用表上运行 `open289 info`、`open289 live -n 5`）。
 
-发布（`release.yml`）：推送一个与 `open289.__version__` 相同的标签 `vX.Y.Z`（0.1.0 对应 `v0.1.0`）。工作流会运行 CI 检查，拒绝与版本不符的标签，构建，创建带文件的 GitHub release，并通过**可信发布（trusted publishing）**（无需令牌）发布到 PyPI。在 pypi.org 上需做一次性设置：为项目 `open289` 添加一个（待定的）可信发布者，所有者 `FrostFlops`，仓库 `open289`，工作流 `release.yml`，环境 `pypi`，并在仓库设置中创建环境 `pypi`。
+发布（`release.yml`）：推送一个与 `open289.__version__` 相同的标签 `vX.Y.Z`（0.1.1 对应 `v0.1.1`）。工作流会运行 CI 检查，拒绝与版本不符的标签，构建，创建带文件的 GitHub release，并通过**可信发布（trusted publishing）**（无需令牌）发布到 PyPI。在 pypi.org 上需做一次性设置：为项目 `open289` 添加一个（待定的）可信发布者，所有者 `FrostFlops`，仓库 `open289`，工作流 `release.yml`，环境 `pypi`，并在仓库设置中创建环境 `pypi`。
 
 ## 协议
 
