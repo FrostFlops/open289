@@ -32,6 +32,24 @@ import time
 from . import __version__
 from .paths import PKG_PARENT, home, state_dir
 
+
+def _wait_adapter_free(timeout=10.0):
+    """Wait until no open289 process holds the adapter lock (True), or the timeout passes (False).
+
+    A log prints its summary before it disconnects and releases the lock; waiting here means the call right after
+    log_stop does not get BUSY from the log that is still shutting down."""
+    from .errors import Open289Error
+    from .lock import AdapterLock
+    t_end = time.time() + timeout
+    while True:
+        try:
+            AdapterLock().acquire().release()
+            return True
+        except Open289Error:
+            if time.time() >= t_end:
+                return False
+            time.sleep(0.1)
+
 PROTOCOL_VERSIONS = ('2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05')
 STRUCTURED_SINCE = '2025-06-18'      # structuredContent in tool results
 DEFAULT_WALL_S = 120.0               # per-call limit of a one-shot tool
@@ -1309,6 +1327,8 @@ class Server:
                     'note': 'log %s had already ended before this call; this is its summary%s' % (
                         j.job, '. A stop request was sent anyway: a live or log running elsewhere (a terminal, '
                                'another program) ends cleanly' if sent else '')}
+        if sent:
+            _wait_adapter_free()
         final = j.final()
         if final is None:
             raise ToolError('INTERNAL', 'log %s ended without a summary' % j.job, _tail(j.stderr),

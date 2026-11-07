@@ -458,6 +458,12 @@ def test_a_log_of_another_server_is_seen_and_stopped(mcp, tmp_path, logs):
         assert err_code(busy) == 'BUSY' and st['job'] in busy['structuredContent']['error']['message']
         stop = doc(mcp.call('log_stop'))
         assert stop['job'] == st['job'] and stop['stopped_by'] == 'stop' and 'already_ended' not in stop
+        r = mcp.call('read')                               # the adapter is free right after log_stop (no BUSY)
+        assert not r.get('isError'), r['content'][0]['text']
+        # b owns the process: it reports 'done' once the process has exited, a moment after the summary
+        t_end = time.time() + 15
+        while doc(b.call('log_status'))['state'] == 'running' and time.time() < t_end:
+            time.sleep(0.2)
         assert doc(b.call('log_status'))['state'] == 'done'
     finally:
         b.close()
