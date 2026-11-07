@@ -1,0 +1,19 @@
+# runtime data (state: locks, stop requests, simulator state; data: logs and downloads)
+state/
+data/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+
+# Local reverse-engineering material, never redistributed: Fluke's proprietary APK, its decompiled
+# sources and the jadx tool (re/), working notes that quote decompiled code (notes/), and raw hardware
+# captures that contain the device address and serial number (logs/).
+re/
+notes/
+logs/

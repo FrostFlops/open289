@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:          # the release workflow runs the same checks first
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ["3.10", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+      # No Bluetooth adapter or meter on the runners: every test runs against the virtual IR3000 FC + Fluke 289
+      # (open289/sim.py). OPEN289_NO_BLE makes the real BLE backend refuse to start.
+      - name: Tests
+        env:
+          OPEN289_SIM: "1"
+          OPEN289_NO_BLE: "1"
+        run: python -m pytest tests -m "not hw" -q
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Tracked files carry no local paths
+        run: |
+          if git grep -nE '(^|[^A-Za-z0-9%])[A-Za-z]:[\\/][A-Za-z0-9_]' -- . ':!tests/fixtures' ':!LICENSE'; then
+            echo "::error::local paths in tracked files"; exit 1
+          fi
+      - name: Build and check
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check --strict dist/*
+      - name: Smoke test of the built wheel (virtual meter)
+        env:
+          OPEN289_SIM: "1"
+          OPEN289_NO_BLE: "1"
+        run: |
+          python -m venv /tmp/wheeltest
+          /tmp/wheeltest/bin/pip install dist/*.whl
+          cd /tmp && OPEN289_HOME=/tmp/o289 /tmp/wheeltest/bin/open289 info
+          cd /tmp && OPEN289_HOME=/tmp/o289 /tmp/wheeltest/bin/open289 live -n 5
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
