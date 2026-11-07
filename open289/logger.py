@@ -174,19 +174,30 @@ async def run_log(*, address, out_path, fmt='csv', duration=None, every=0.0, sna
                     q: asyncio.Queue = asyncio.Queue()
                     await link.client.start_notify(READING_CHR, lambda _h, d: q.put_nowait((time.time(), bytes(d))))
                     snap_task = None
+                    # The snapshot task ends on this flag, not on cancellation alone: on Python < 3.12
+                    # asyncio.wait_for (used by every adapter command) can swallow a cancel that arrives just as
+                    # its result does, and a cancelled-but-still-looping task would hang the log at its end.
+                    snap_stop = asyncio.Event()
                     if snapshot_every:
                         async def snapshots():
                             nonlocal n_snapshots
                             nxt = time.time() + snapshot_every      # fixed ticks: the query time does not add up
-                            while True:
-                                await asyncio.sleep(max(0.0, nxt - time.time()))
+                            while not snap_stop.is_set():
+                                try:
+                                    await asyncio.wait_for(snap_stop.wait(), timeout=max(0.0, nxt - time.time()))
+                                    break                           # stop requested
+                                except asyncio.TimeoutError:
+                                    pass
                                 nxt = max(nxt + snapshot_every, time.time())
                                 t = time.time()
                                 try:
                                     ack, payload = await link.meter.raw('QDDB')
                                 except Open289Error as e:
-                                    w.snapshot({'t': t, 'ack': 'ERROR', 'error': e.to_dict()})
+                                    if not snap_stop.is_set():
+                                        w.snapshot({'t': t, 'ack': 'ERROR', 'error': e.to_dict()})
                                     continue
+                                if snap_stop.is_set():
+                                    break
                                 obj = {'t': t, 'ack': ack, 'hex': payload.hex()}
                                 if ack == 'OK' and payload.startswith(b'#0'):
                                     try:
@@ -227,11 +238,13 @@ async def run_log(*, address, out_path, fmt='csv', duration=None, every=0.0, sna
                                       'records': n_written, 'last': last_rec and last_rec['display']})
                     finally:
                         if snap_task:
-                            snap_task.cancel()
-                            try:
-                                await snap_task
-                            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                                pass
+                            snap_stop.set()                         # ends the loop after its current query
+                            done, _ = await asyncio.wait({snap_task}, timeout=15.0)
+                            if not done:
+                                snap_task.cancel()
+                                await asyncio.wait({snap_task}, timeout=5.0)
+                            if snap_task.done() and not snap_task.cancelled():
+                                snap_task.exception()               # retrieved: no 'never retrieved' warning
                         try:
                             await link.client.stop_notify(READING_CHR)
                         except Exception:  # noqa: BLE001
