@@ -14,6 +14,7 @@ jobs:
   test:
     name: tests (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -34,7 +35,7 @@ jobs:
         env:
           OPEN289_SIM: "1"
           OPEN289_NO_BLE: "1"
-        run: python -m pytest tests -m "not hw" -q
+        run: python -m pytest tests -m "not hw" -v --durations=15
 
   package:
     runs-on: ubuntu-latest

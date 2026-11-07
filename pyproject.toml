@@ -27,7 +27,7 @@ Homepage = "https://github.com/FrostFlops/open289"
 Issues = "https://github.com/FrostFlops/open289/issues"
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["pytest", "pytest-timeout"]
 
 [project.scripts]
 open289 = "open289.cli:main"
@@ -42,3 +42,5 @@ version = {attr = "open289.__version__"}
 [tool.pytest.ini_options]
 markers = ["hw: needs a real IR3000 FC + Fluke 289 (run with: pytest -m hw)"]
 addopts = "-m 'not hw'"
+timeout = 180                 # pytest-timeout: a hung test fails with a stack dump instead of stalling CI
+faulthandler_timeout = 120    # dump every thread's stack if a test runs this long

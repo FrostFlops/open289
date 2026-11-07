@@ -94,11 +94,20 @@ def test_log_stop(capsys, tmp_path):
     def worker():
         result['code'] = cli.main(['log', '--out', str(out), '--status-every', '0'])
 
-    t = threading.Thread(target=worker)
+    t = threading.Thread(target=worker, daemon=True)     # daemon: a stuck log can never keep pytest alive
     t.start()
-    time.sleep(1.5)
+    # Send the stop only once the log is really running: a log clears a stale stop request when it starts, so a
+    # stop sent before that (slow CI runner) would be erased and the log would run forever.
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if out.exists() and len(out.read_text(encoding='utf-8').splitlines()) >= 3:
+            break
+        time.sleep(0.1)
     assert cli.main(['stop']) == 0
-    t.join(timeout=15)
+    t.join(timeout=20)
+    if t.is_alive():
+        cli.main(['stop'])
+        t.join(timeout=10)
     assert not t.is_alive() and result['code'] == 0
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.strip()]
     done = [o for o in lines if o.get('event') == 'done']
