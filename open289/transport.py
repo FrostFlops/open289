@@ -68,8 +68,10 @@ async def scan(seconds: float = 10.0) -> list[dict]:
     return sorted(seen.values(), key=lambda d: -(d.get('rssi') or -999))
 
 
-async def find_adapter(address: str | None, timeout: float = 15.0):
-    """BLEDevice (or the simulator's equivalent) of the adapter to use; NOT_FOUND when nothing advertises."""
+async def find_adapter(address: str | None, timeout: float = 30.0):
+    """BLEDevice (or the simulator's equivalent) of the adapter to use; NOT_FOUND when nothing advertises.
+
+    The IR3000 FC advertises only every few seconds, so a scan can take a while to see it."""
     _, Scanner, BleakError = backend()
     try:
         if address:
@@ -90,8 +92,9 @@ class Link:
     """Connected adapter + meter for one command: async with Link(address) as link: link.meter.query(...)."""
 
     def __init__(self, address: str | None = None, verbose: bool = False, connect_timeout: float = 20.0,
-                 attempts: int = 3, on_disconnect=None):
+                 attempts: int = 3, on_disconnect=None, device=None):
         self.address = address
+        self.device = device             # a device found by an earlier scan: skips the scan
         self.verbose = verbose
         self.connect_timeout = connect_timeout
         self.attempts = attempts
@@ -110,7 +113,7 @@ class Link:
         from .adapter import Adapter
         from .meter import Meter
         Client, _, BleakError = backend()
-        dev = await find_adapter(self.address)
+        dev = self.device or await find_adapter(self.address)
         last = None
         for attempt in range(self.attempts):
             try:

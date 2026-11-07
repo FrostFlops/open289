@@ -208,7 +208,7 @@ open289 log --every 1s --duration 8h --out night.csv                    # one re
 |---|---|---|
 | `--out`, `-o` | `data/log_<time>.csv` | output file (`.csv` or `.jsonl`; relative to the current folder; the default is in the [data folder](#data-folders)) |
 | `--format csv\|jsonl` | from the `--out` extension, else csv | file format |
-| `--duration`, `-d` | `forever` | `30s`, `10m`, `8h`, `1.5h`, `2d`, `forever` |
+| `--duration`, `-d` | `forever` | logging time, counted from the first connection: `30s`, `10m`, `8h`, `1.5h`, `2d`, `forever` |
 | `--every` | `0` | one reading per interval (the most recent reading at each tick); `0` = every notification, ~4/s |
 | `--snapshot-every` | `0` (off) | also record the full display (modes, MIN / MAX / AVG) at this interval, e.g. `10s` |
 | `--status-every` | `10s` | status line on stdout; `0` = off |
@@ -244,12 +244,19 @@ answer) and `display` (the same object as a `read` snapshot). A failed snapshot 
 summary then cover only the written rows. Use `--every 0` when you need every notification (or to see
 transients), `--every` for long runs.
 
-**Status lines** on stdout while it runs (and a `started` line first):
+**Status lines** on stdout while it runs (a `started` line first, then `connected` once the adapter is found and
+armed, then a `status` line every `--status-every`):
 
 ```
 {"ok":true,"cmd":"log","event":"started","file":"...x.csv","format":"csv","duration_s":3.0,"every_s":0.0,"snapshot_every_s":1.0}
-{"ok":true,"cmd":"log","event":"status","elapsed_s":1.1,"records":4,"last":"5.0627 V DC"}
+{"ok":true,"cmd":"log","event":"connected","connect_s":2.41,"model":"FLUKE 289","adapter":"FA:28:90:00:00:01"}
+{"ok":true,"cmd":"log","event":"status","elapsed_s":3.5,"records":4,"last":"5.0627 V DC"}
 ```
+
+**Connecting takes time.** Every command first has to see the adapter advertise. The IR3000 FC advertises only every
+few seconds, and right after a previous connection ends it can take about 20 s before it advertises again (measured on
+hardware). `--duration` therefore counts from the first connection (`connect_s` says how long finding the adapter
+took), so a `--duration 30s` log really holds about 30 s of readings.
 
 **Reconnect and gaps.** When the Bluetooth link drops (meter off, adapter asleep, out of range, "no live reading for 10
 s") the log prints `link_lost` (with `retry_for_s`), writes a `link_lost` event into a JSONL file, retries every 3 s,
@@ -265,10 +272,11 @@ last row.
 **Summary** (the last line, `"event":"done"`):
 
 ```
-{"ok":true,"cmd":"log","event":"done","file":"...x.csv","format":"csv","records":12,"packets":12,"snapshots":2,"started":1794027865.6,"ended":1794027868.7,"duration_s":3.125,"stopped_by":"duration","gaps":[],"stats":{"V DC":{"n":12,"min":5.0614,"max":5.0629,"mean":5.0622}},"meter":{"model":"FLUKE 289","adapter":"FA:28:90:00:00:01"},"display_file":"...x.csv.display.jsonl"}
+{"ok":true,"cmd":"log","event":"done","file":"...x.csv","format":"csv","records":12,"packets":12,"snapshots":2,"started":1794027863.2,"ended":1794027868.7,"duration_s":5.535,"connect_s":2.41,"logging_s":3.125,"stopped_by":"duration","gaps":[],"stats":{"V DC":{"n":12,"min":5.0614,"max":5.0629,"mean":5.0622}},"meter":{"model":"FLUKE 289","adapter":"FA:28:90:00:00:01"},"display_file":"...x.csv.display.jsonl"}
 ```
 
-`records` rows written, `packets` notifications received, `snapshots` display snapshots taken, `stopped_by`
+`records` rows written, `packets` notifications received, `snapshots` display snapshots taken, `duration_s` the
+whole command, `connect_s` the time until the first connection, `logging_s` the time from then on, `stopped_by`
 (`duration`, `stop`, `link_lost`, `interrupted`), `gaps` (a list of `{from, to, reason}`, Unix seconds), `stats`
 (`n`, `min`, `max`, `mean` of the primary value per unit; overloads are left out) and `display_file` (CSV with
 snapshots only). `--text` prints a two-line version with the same numbers.
@@ -474,7 +482,7 @@ second; it does not need the adapter. `recording` and the one-shot commands do n
 
 Every command prints JSON on stdout, one object per line, compact. One-shot commands print one object. `live`, `read
 --every`, `log` and `recording` print event lines and end with an `"event": "done"` summary. Event lines carry
-`"ok": true, "cmd": ..., "event": ...` (`started`, `status`, `progress`, `link_lost`, `reconnected`, `done`); `live`
+`"ok": true, "cmd": ..., "event": ...` (`started`, `connected`, `status`, `progress`, `link_lost`, `reconnected`, `done`); `live`
 readings are `{"type":"reading", ...}`. The first field of a result is `ok`. Warnings and `--verbose` traffic go to
 stderr. Values are in SI base units; `display` is the text from the meter. Times: `t`, `pc_time`, `started`, `ended` are Unix seconds on the PC; `time`, `start`, `end`, `info.meter.clock`, and the numeric `ts` / `clock_epoch`, are the meter's local clock (no timezone).
 

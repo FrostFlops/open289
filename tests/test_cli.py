@@ -66,8 +66,10 @@ def test_log_csv(capsys, tmp_path):
     code, objs = run(capsys, 'log', '--duration', '1.5s', '--out', str(out), '--status-every', '0.5s')
     assert code == 0
     assert objs[0]['event'] == 'started'
+    assert any(o.get('event') == 'connected' and o['connect_s'] >= 0 for o in objs)
     done = objs[-1]
     assert done['event'] == 'done' and done['stopped_by'] == 'duration' and done['records'] > 5
+    assert done['logging_s'] >= 1.5            # --duration counts from the first connection, not from the scan
     assert 4.9 < done['stats']['V DC']['mean'] < 5.2
     rows = list(csv.DictReader(open(out, encoding='utf-8')))
     assert len(rows) == done['records'] and rows[0]['unit'] == 'V DC'

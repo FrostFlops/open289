@@ -175,7 +175,7 @@ open289 log --every 1s --duration 8h --out night.csv                    # one re
 |---|---|---|
 | `--out`、`-o` | `data/log_<time>.csv` | 输出文件（`.csv` 或 `.jsonl`；相对于当前文件夹；默认位于[数据文件夹](#数据文件夹)） |
 | `--format csv\|jsonl` | 取自 `--out` 的扩展名，否则为 csv | 文件格式 |
-| `--duration`、`-d` | `forever` | `30s`、`10m`、`8h`、`1.5h`、`2d`、`forever` |
+| `--duration`、`-d` | `forever` | 记录时长，从首次连接时开始计算：`30s`、`10m`、`8h`、`1.5h`、`2d`、`forever` |
 | `--every` | `0` | 每个间隔一个读数（每个节拍取最近的读数）；`0` = 每个通知都记录，~4/s |
 | `--snapshot-every` | `0`（关闭） | 同时按此间隔记录完整显示（模式、MIN / MAX / AVG），例如 `10s` |
 | `--status-every` | `10s` | 在 stdout 上输出状态行；`0` = 关闭 |
@@ -205,12 +205,15 @@ pc_time,local_time,value,unit,display,state,function,attribute,secondary_value,s
 
 **抽样。** `--every 1s` 每秒写一行：取当时最新的读数。摘要中的统计量因此只覆盖已写入的行。需要每个通知（或要观察瞬态）时用 `--every 0`，长时间运行时用 `--every`。
 
-**状态行**在运行期间输出到 stdout（最先是一行 `started`）：
+**状态行**在运行期间输出到 stdout（最先是一行 `started`，找到并启用适配器后输出 `connected`，之后每隔 `--status-every` 输出一行 `status`）：
 
 ```
 {"ok":true,"cmd":"log","event":"started","file":"...x.csv","format":"csv","duration_s":3.0,"every_s":0.0,"snapshot_every_s":1.0}
-{"ok":true,"cmd":"log","event":"status","elapsed_s":1.1,"records":4,"last":"5.0627 V DC"}
+{"ok":true,"cmd":"log","event":"connected","connect_s":2.41,"model":"FLUKE 289","adapter":"FA:28:90:00:00:01"}
+{"ok":true,"cmd":"log","event":"status","elapsed_s":3.5,"records":4,"last":"5.0627 V DC"}
 ```
+
+**连接需要时间。** 每条命令都要先看到适配器的广播。IR3000 FC 每隔几秒才广播一次，而在上一次连接刚结束后，它可能要约 20 s 才重新开始广播（硬件实测）。因此 `--duration` 从首次连接时开始计算（`connect_s` 表示找到适配器用了多久），`--duration 30s` 的记录确实包含约 30 s 的读数。
 
 **重连与间隙。** 当蓝牙链路中断（万用表关机、适配器休眠、超出范围、"10 s 没有实时读数"）时，记录会输出 `link_lost`（带 `retry_for_s`），在 JSONL 文件中写入一个 `link_lost` 事件，每 3 s 重试一次，成功后输出 `reconnected`（带 `gap_s`）并继续追加到同一个文件。如果链路在 `--reconnect-for` 内没有恢复，记录会以 `stopped_by: "link_lost"` 结束，已写入的数据保留。只有当一个读数都没记录到时才会以 `LINK_LOST` 失败；从未连上的记录会立即以真实错误（`NOT_FOUND`、`DETACHED`，……）失败。
 
@@ -219,10 +222,10 @@ pc_time,local_time,value,unit,display,state,function,attribute,secondary_value,s
 **摘要**（最后一行，`"event":"done"`）：
 
 ```
-{"ok":true,"cmd":"log","event":"done","file":"...x.csv","format":"csv","records":12,"packets":12,"snapshots":2,"started":1794027865.6,"ended":1794027868.7,"duration_s":3.125,"stopped_by":"duration","gaps":[],"stats":{"V DC":{"n":12,"min":5.0614,"max":5.0629,"mean":5.0622}},"meter":{"model":"FLUKE 289","adapter":"FA:28:90:00:00:01"},"display_file":"...x.csv.display.jsonl"}
+{"ok":true,"cmd":"log","event":"done","file":"...x.csv","format":"csv","records":12,"packets":12,"snapshots":2,"started":1794027863.2,"ended":1794027868.7,"duration_s":5.535,"connect_s":2.41,"logging_s":3.125,"stopped_by":"duration","gaps":[],"stats":{"V DC":{"n":12,"min":5.0614,"max":5.0629,"mean":5.0622}},"meter":{"model":"FLUKE 289","adapter":"FA:28:90:00:00:01"},"display_file":"...x.csv.display.jsonl"}
 ```
 
-`records` 为已写入的行数，`packets` 为收到的通知数，`snapshots` 为已获取的显示快照数，`stopped_by`（`duration`、`stop`、`link_lost`、`interrupted`），`gaps`（`{from, to, reason}` 的列表，Unix 秒），`stats`（每种单位主值的 `n`、`min`、`max`、`mean`；过载不计入）以及 `display_file`（仅限带快照的 CSV）。`--text` 输出一个两行的版本，数字相同。
+`records` 为已写入的行数，`packets` 为收到的通知数，`snapshots` 为已获取的显示快照数，`duration_s` 为整条命令的耗时，`connect_s` 为首次连接前的耗时，`logging_s` 为此后的记录时长，`stopped_by`（`duration`、`stop`、`link_lost`、`interrupted`），`gaps`（`{from, to, reason}` 的列表，Unix 秒），`stats`（每种单位主值的 `n`、`min`、`max`、`mean`；过载不计入）以及 `display_file`（仅限带快照的 CSV）。`--text` 输出一个两行的版本，数字相同。
 
 ## 已保存数据
 
@@ -370,7 +373,7 @@ python -m open289.sim audit [--clear]                 # every GATT write the too
 
 ## 输出格式
 
-每条命令都在 stdout 上输出 JSON，每行一个对象，紧凑格式。一次性命令输出一个对象。`live`、`read --every`、`log` 和 `recording` 输出事件行，并以一个 `"event": "done"` 摘要结束。事件行带有 `"ok": true, "cmd": ..., "event": ...`（`started`、`status`、`progress`、`link_lost`、`reconnected`、`done`）；`live` 读数为 `{"type":"reading", ...}`。结果的第一个字段是 `ok`。警告和 `--verbose` 的通信记录输出到 stderr。数值以 SI 基本单位表示；`display` 是万用表给出的文本。时间：`t`、`pc_time`、`started`、`ended` 是电脑上的 Unix 秒；`time`、`start`、`end`、`info.meter.clock` 以及数值形式的 `ts` / `clock_epoch` 是万用表的本地时钟（不含时区）。
+每条命令都在 stdout 上输出 JSON，每行一个对象，紧凑格式。一次性命令输出一个对象。`live`、`read --every`、`log` 和 `recording` 输出事件行，并以一个 `"event": "done"` 摘要结束。事件行带有 `"ok": true, "cmd": ..., "event": ...`（`started`、`connected`、`status`、`progress`、`link_lost`、`reconnected`、`done`）；`live` 读数为 `{"type":"reading", ...}`。结果的第一个字段是 `ok`。警告和 `--verbose` 的通信记录输出到 stderr。数值以 SI 基本单位表示；`display` 是万用表给出的文本。时间：`t`、`pc_time`、`started`、`ended` 是电脑上的 Unix 秒；`time`、`start`、`end`、`info.meter.clock` 以及数值形式的 `ts` / `clock_epoch` 是万用表的本地时钟（不含时区）。
 
 错误是一个对象加非零退出码：
 

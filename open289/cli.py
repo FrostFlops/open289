@@ -50,7 +50,7 @@ def _default_text(obj):
         e = obj.get('error', {})
         return f"error {e.get('code')}: {e.get('message')}" + (f"\n  hint: {e['hint']}" if e.get('hint') else '')
     ev = obj.get('event')
-    if ev in ('started', 'status', 'link_lost', 'reconnected', 'progress'):
+    if ev in ('started', 'connected', 'status', 'link_lost', 'reconnected', 'progress'):
         rest = {k: v for k, v in obj.items() if k not in ('ok', 'cmd', 'event')}
         return f"[{obj.get('cmd')} {ev}] " + ', '.join(f'{k}={v}' for k, v in rest.items())
     return json.dumps(obj, ensure_ascii=False, indent=1)
@@ -461,7 +461,7 @@ async def cmd_selftest(args):
         check('S01', 'adapter advertising', False, e.message, 'an IR3000 FC advertising service B6981800')
         return _selftest_emit(items)
     try:
-        async with Link(args.address, args.verbose) as link:
+        async with Link(args.address, args.verbose, device=dev) as link:
             check('S02', 'connect and arm the adapter control point', True, link.client.address)
             model = await link.attached_model()
             if not check('S03', 'meter attached', 'PC3000' not in model.upper(), model, 'FLUKE 287/289'):

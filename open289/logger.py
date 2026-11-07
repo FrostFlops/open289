@@ -124,7 +124,8 @@ async def run_log(*, address, out_path, fmt='csv', duration=None, every=0.0, sna
     w = _Writer(out_path, fmt)
     stats = _Stats()
     t_start = time.time()
-    deadline = t_start + duration if duration else None
+    deadline = None                  # set at the first connection: --duration is logging time, not scan time
+    t_connected = None
     n_written = 0
     n_packets = 0
     n_snapshots = 0
@@ -160,6 +161,12 @@ async def run_log(*, address, out_path, fmt='csv', duration=None, every=0.0, sna
                 async with link:
                     model = await link.require_meter()
                     meter_info = {'model': model, 'adapter': link.client.address}
+                    if t_connected is None:
+                        t_connected = time.time()
+                        if duration:
+                            deadline = t_connected + duration
+                        emit({'ok': True, 'cmd': 'log', 'event': 'connected',
+                              'connect_s': round(t_connected - t_start, 2), **meter_info})
                     if gaps and gaps[-1].get('to') is None:
                         gaps[-1]['to'] = time.time()
                         w.event({'t': time.time(), 'type': 'event', 'event': 'reconnected'})
@@ -170,8 +177,10 @@ async def run_log(*, address, out_path, fmt='csv', duration=None, every=0.0, sna
                     if snapshot_every:
                         async def snapshots():
                             nonlocal n_snapshots
+                            nxt = time.time() + snapshot_every      # fixed ticks: the query time does not add up
                             while True:
-                                await asyncio.sleep(snapshot_every)
+                                await asyncio.sleep(max(0.0, nxt - time.time()))
+                                nxt = max(nxt + snapshot_every, time.time())
                                 t = time.time()
                                 try:
                                     ack, payload = await link.meter.raw('QDDB')
@@ -255,6 +264,8 @@ async def run_log(*, address, out_path, fmt='csv', duration=None, every=0.0, sna
     summary = {'ok': True, 'cmd': 'log', 'event': 'done', 'file': os.path.abspath(out_path), 'format': fmt,
                'records': n_written, 'packets': n_packets, 'snapshots': n_snapshots,
                'started': t_start, 'ended': t_end, 'duration_s': round(t_end - t_start, 3),
+               'connect_s': None if t_connected is None else round(t_connected - t_start, 2),
+               'logging_s': None if t_connected is None else round(t_end - t_connected, 3),
                'stopped_by': stopped_by, 'gaps': gaps, 'stats': stats.public(), **({'meter': meter_info} if meter_info else {})}
     if w.side_path:
         summary['display_file'] = os.path.abspath(w.side_path)

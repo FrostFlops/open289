@@ -24,7 +24,7 @@ adapter found), `--sim` (virtual meter), `--max-wall S` (limit for one-shot comm
 Errors: `{"ok": false, "cmd": ..., "error": {"code", "message", "hint"}}` with a non-zero exit code. Exit codes:
 0 ok (also a clean stop), 1 internal error or self-test failed, 2 bad argument, 3 not found, 4 busy, 5 meter busy /
 detached / no data, 6 timeout or link or protocol error, 7 refused as unsafe. Read `error.hint`: it says what to do.
-Durations are `30s`, `5m`, `1.5h`, `2d` or `forever`.
+Durations are `30s`, `5m`, `1.5h`, `2d` or `forever`. Every command first waits for the adapter to advertise: usually a few seconds, up to ~20 s right after the previous command disconnected (hardware). `log --duration` counts from the first connection (`connect_s` in the `connected` line and the summary), so the file holds the full duration.
 
 ## Before you start
 - The adapter must be awake: press its button for more than 1 s until the LED flashes green. It goes to sleep with the meter
