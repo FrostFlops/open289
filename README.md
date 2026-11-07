@@ -1,6 +1,6 @@
 # open289
 
-English
+English | [简体中文](https://github.com/FrostFlops/open289/blob/main/README.zh-CN.md)
 
 [![CI](https://github.com/FrostFlops/open289/actions/workflows/ci.yml/badge.svg)](https://github.com/FrostFlops/open289/actions/workflows/ci.yml)
 

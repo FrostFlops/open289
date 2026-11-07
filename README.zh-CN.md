@@ -1,6 +1,8 @@
-> 本文是 [English README](README.md) 的简体中文翻译，如有出入，以英文版为准。
-
 # open289
+
+[English](README.md) | 简体中文
+
+> 本文是英文 README 的简体中文翻译，如有出入，以英文版为准。
 
 [English](README.md) | 简体中文
 
