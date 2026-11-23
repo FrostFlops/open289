@@ -59,8 +59,9 @@ OVERLOAD = 9.99999999e37
 
 
 _ACK_CODES = {
-    "EXECUTION_ERROR": ("METER_BUSY", "the meter is on a menu, result page or setup screen: close it on the meter "
-                                      "(or with open289 press), then retry"),
+    "EXECUTION_ERROR": ("METER_BUSY", "the meter shows a page that blocks queries (a MIN MAX / Peak / recording "
+                                      "result page or a saved-item viewer): close it on the meter (or with open289 "
+                                      "press, usually F4), then retry"),
     "NO_DATA": ("NO_DATA", "the meter has no data for this request (e.g. no saved item with that index)"),
     "SYNTAX_ERROR": ("METER_ERROR", "the meter did not accept the command"),
     "NO_REPLY": ("METER_ERROR", "the meter did not answer: is it switched on and is the adapter seated on its IR port?"),

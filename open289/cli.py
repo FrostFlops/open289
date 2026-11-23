@@ -319,7 +319,7 @@ async def cmd_recording(args):
                             break
                         except (Open289Error, ValueError) as e:
                             if isinstance(e, MeterError) and e.ack == 'EXECUTION_ERROR':
-                                raise Open289Error('METER_BUSY', f'record {k}: the meter is on a menu / result page',
+                                raise Open289Error('METER_BUSY', f'record {k}: the meter shows a result page or viewer',
                                                    f'close it on the meter, then resume with --start {k}') from None
                             if attempt == 3:
                                 raise Open289Error('PROTOCOL_ERROR', f'record {k} failed: {e}',
@@ -360,6 +360,143 @@ class _DummyTrend:
         self.samples, self.record_type, self.stable, self.transient = 0, '', '', ''
 
 
+# Wording kept for compatibility (public output). Menus do NOT cause it: QDDB answers EXECUTION_ERROR only on a
+# saved-item viewer, a MIN MAX / Peak / recording result page (or the Save page opened from one) (docs/UI.md).
+BLOCKED_STATE = 'menu / result page open (measurement queries blocked)'
+LINK_CLOSED_STATE = 'link closed (meter switched off, or the adapter went out of range)'
+# Display-state fields compared before and after a key (QDDB). Menus, panels, help pages and the lead-alert warning
+# overlay the reading without changing any of them: they are invisible over the protocol (docs/UI.md). minmax_start
+# shows a MIN MAX / Peak Restart. In autorange the range follows the input, so it is compared only in manual range.
+STATE_FIELDS = ('function', 'secondary_function', 'autorange', 'range', 'unit', 'modes', 'minmax_start')
+SETTING_READINGS = {'DB_REF': 'db_ref', 'TEMP_OFFSET': 'temp_offset'}   # settings QDDB reports as readings
+EFFECT_KEYS = ('HOLD', 'MINMAX', 'RANGE')         # keys whose effect always shows in QDDB when the key is accepted
+# Ignored keys whose cause is visible in the modes: no evidence of a page that blocks keys.
+EXPLAINED_IGNORES = {'RANGE': ('REL', 'REL_PERCENT'), 'MINMAX': ('RECORD',)}
+CURRENT_FUNCTIONS = ('A_', 'MA_', 'UA_')          # QDDB function prefixes of the current positions (A, mA, uA)
+SOFT_KEYS = ('F1', 'F2', 'F3', 'F4')
+NAV_KEYS = ('UP', 'DOWN', 'LEFT', 'RIGHT', 'INFO', 'BACKLIGHT')   # never close a menu or panel
+PRESS_NOTES = {
+    'soft': 'display state unchanged: a menu or panel may have opened, moved or closed (menus overlay the reading '
+            'and are invisible over the protocol), or a menu choice was refused (the menu then stays open). Look at '
+            'the meter screen before the next soft key: a blind F4 can open Setup.',
+    'save_panel': 'HOLD came on with a soft key: F2 Save on the measurement screen opens the Save panel and holds the '
+                  'reading. The panel is invisible over the protocol and remembers its cursor: F2 Save stores a '
+                  'reading only when the cursor is on Save, F4 Close releases HOLD. Look at the screen first.',
+    'updown': 'no visible change: moves a menu cursor or an edited value; on a screen without a cursor (measurement '
+              'screen, saved-item viewer) UP/DOWN change the LCD contrast (the opposite key undoes it).',
+    'leftright': 'no visible change: moves a menu cursor or editor digit; ignored on the measurement screen.',
+    'info': 'help pages overlay the reading and are invisible over the protocol; F4 closes them.',
+    'autohold': 'HOLD in AutoHOLD takes a new held value and stays in AutoHOLD; F1 Cancel leaves AutoHOLD.',
+    'ignored': 'the key had no effect: not available in this function or mode (MIN MAX in diode and LoZ V, RANGE on '
+               'a fixed range or with REL on), or the meter shows a page that blocks keys (lead alert).',
+}
+
+
+def _view(state):
+    """'measurement' (QDDB answered), 'blocked' (EXECUTION_ERROR: viewer / result page) or None (unknown)."""
+    if isinstance(state, dict) and 'function' in state:
+        return 'measurement'
+    return 'blocked' if state == BLOCKED_STATE else None
+
+
+def _settings(state):
+    return {SETTING_READINGS[r['id']]: r.get('value') for r in state.get('readings') or []
+            if r.get('id') in SETTING_READINGS}
+
+
+def press_changes(before, after):
+    """Display-state fields that changed across one key; None when it cannot be told (a side is blocked/unknown)."""
+    vb, va = _view(before), _view(after)
+    if vb is None or va is None or (vb == va == 'blocked'):
+        return None
+    if vb != va:
+        return ['view']
+    drift = bool(before.get('autorange')) and bool(after.get('autorange'))
+    out = [f for f in STATE_FIELDS if before.get(f) != after.get(f) and not (f == 'range' and drift)]
+    sb, sa = _settings(before), _settings(after)
+    out += [f for f in sorted(sb.keys() & sa.keys()) if sb[f] != sa[f]]   # dBm reference, temperature offset
+    return out
+
+
+def _added_hold(before, after):
+    return (_view(before) == _view(after) == 'measurement' and 'HOLD' in (after.get('modes') or ())
+            and 'HOLD' not in (before.get('modes') or ()))
+
+
+def press_note(key, held, before, changed, after=None):
+    """Explanation for a key whose effect is invisible or absent (None when nothing needs explaining)."""
+    if key in SOFT_KEYS and changed and _added_hold(before, after):
+        return PRESS_NOTES['save_panel']
+    if key in ('UP', 'DOWN') and changed is None and _view(before) == _view(after) == 'blocked':
+        return PRESS_NOTES['updown']            # saved-item viewer: the contrast changes, nothing shows
+    if changed != []:
+        return None
+    if key in EFFECT_KEYS:
+        modes = before.get('modes') or () if isinstance(before, dict) else ()
+        if key == 'RANGE' and held and isinstance(before, dict) and before.get('autorange'):
+            return None                         # RANGE held in autorange: nothing to change
+        if key == 'HOLD' and 'AUTO_HOLD' in modes:
+            return PRESS_NOTES['autohold']
+        return PRESS_NOTES['ignored']
+    if key in SOFT_KEYS:
+        return PRESS_NOTES['soft']
+    if key in ('UP', 'DOWN'):
+        return PRESS_NOTES['updown']
+    if key in ('LEFT', 'RIGHT'):
+        return PRESS_NOTES['leftright']
+    if key == 'INFO':
+        return PRESS_NOTES['info']
+    return None
+
+
+def press_warnings(presses):
+    """Sequence-level warnings for `press`: ignored keys, a possible lead alert, an unconfirmed soft key."""
+    warns = []
+    ignored = [p for p in presses if p.get('note') == PRESS_NOTES['ignored']]
+    if ignored:
+        warns.append({'code': 'KEY_IGNORED',
+                      'message': f"{', '.join(p['key'] for p in ignored)} had no effect: "
+                                 'not available in this function or mode, or a page that blocks keys is open'})
+
+        def unexplained_current(p):
+            st = p.get('state')
+            if _view(st) != 'measurement' or not st['function'].startswith(CURRENT_FUNCTIONS):
+                return False
+            return not set(EXPLAINED_IGNORES.get(p['key'], ())) & set(st.get('modes') or ())
+        if any(unexplained_current(p) for p in ignored):
+            warns.append({'code': 'LEAD_ALERT_POSSIBLE',
+                          'message': "in a current function the meter shows 'Leads connected incorrectly' when the "
+                                     'leads are in the wrong jacks (A position: mA jack for the mA ranges or A jack for '
+                                     'the A ranges, never both; uA: mA jack; every other position: both current jacks '
+                                     'empty). That page blocks the keys and is invisible over the protocol: readings '
+                                     'look like a normal near-zero current with state NORMAL. Ask the user to check '
+                                     'the leads.'})
+    # The last key that can close a menu decides whether one may still be open (cursor keys and INFO do not close it).
+    last = next((p for p in reversed(presses) if p['key'] not in NAV_KEYS), None)
+    if last and last['key'] in SOFT_KEYS and (last.get('changed') == [] or last.get('note') == PRESS_NOTES['save_panel']):
+        warns.append({'code': 'MENU_STATE_UNKNOWN',
+                      'message': 'a soft key left the display state unchanged (or opened the Save panel): a menu or '
+                                 'panel may be open on the meter, or a menu choice was refused. Check the screen '
+                                 'before pressing another soft key.'})
+    return warns
+
+
+async def _press_state(link):
+    BleakError = transport.backend()[2]
+    try:
+        return header_dict(await link.meter.display())
+    except MeterError as e:
+        return BLOCKED_STATE if e.ack == 'EXECUTION_ERROR' else e.to_dict()
+    except (Open289Error, ValueError) as e:
+        if not link.client or not link.client.is_connected:
+            return LINK_CLOSED_STATE
+        return {'code': 'UNAVAILABLE', 'message': str(e)}
+    except BleakError as e:
+        if not link.client or not link.client.is_connected:
+            return LINK_CLOSED_STATE
+        return {'code': 'BLE_ERROR', 'message': str(e)}
+
+
 async def cmd_press(args):
     keys = [k.upper() for k in args.keys]
     bad = [k for k in keys if k not in PRESS_KEYS]
@@ -371,6 +508,7 @@ async def cmd_press(args):
     presses = []
     async with Link(args.address, args.verbose) as link:
         await link.require_meter()
+        before = await _press_state(link)        # baseline for the first key's `changed`
         powering_off = False
         for idx, k in enumerate(keys):
             cmd = f'PRESS {k}' + (',HELD_DOWN' if args.held else '')
@@ -379,7 +517,7 @@ async def cmd_press(args):
                 ack, _ = await link.meter.raw(cmd, unsafe=True)
             except Open289Error as e:
                 if powering_off or not link.client.is_connected:
-                    entry.update(ack='LINK_CLOSED', state='meter powering off')
+                    entry.update(ack='LINK_CLOSED', state='meter powering off', changed=None)
                     presses.append(entry)
                     break
                 raise
@@ -389,19 +527,29 @@ async def cmd_press(args):
                 raise Open289Error('METER_ERROR', f'{cmd} was not acknowledged ({ack}); stopped before {keys[idx + 1:]}')
             if k == 'ONOFF':
                 powering_off = True
-                entry['state'] = 'power-off confirmation shown (F1 OK, F4 cancel)'
+                entry.update(state='power-off confirmation shown (F1 OK, F4 cancel)', changed=None)
+                before = None
                 continue
             if powering_off and k == 'F1':
-                entry['state'] = 'meter powering off; the IR3000 switches itself off too'
+                entry.update(state='meter powering off; the IR3000 switches itself off too', changed=None)
                 break
             powering_off = False
             await asyncio.sleep(args.settle)
-            try:
-                entry['state'] = header_dict(await link.meter.display())
-            except MeterError as e:
-                entry['state'] = 'menu / result page open (measurement queries blocked)' if e.ack == 'EXECUTION_ERROR' else e.to_dict()
-            except (Open289Error, ValueError) as e:
-                entry['state'] = {'code': 'UNAVAILABLE', 'message': str(e)}
+            state = await _press_state(link)
+            changed = press_changes(before, state)
+            if k in SOFT_KEYS and changed == [] and idx == len(keys) - 1:
+                # Some menu choices apply late (low-pass takes more than a second): look once more before warning.
+                await asyncio.sleep(max(args.settle, 1.0))
+                again = await _press_state(link)
+                if press_changes(before, again):
+                    state, changed = again, press_changes(before, again)
+            entry['state'], entry['changed'] = state, changed
+            note = press_note(k, bool(args.held), before, changed, state)
+            if note:
+                entry['note'] = note
+            if state == LINK_CLOSED_STATE:
+                break
+            before = state
 
     def text(o):
         out = []
@@ -410,9 +558,13 @@ async def cmd_press(args):
             if isinstance(st, dict) and 'function' in st:
                 pr = st.get('primary') or {}
                 st = f"{st['function']} {'AUTO' if st['autorange'] else 'MANUAL'} {st['range']:g} modes={','.join(st['modes']) or 'NONE'} primary={pr.get('display', '-')}"
-            out.append(f"PRESS {p['key']}{',HELD_DOWN' if p['held'] else ''} -> {p['ack']}" + (f"\n   now: {st}" if st else ''))
+            ch = p.get('changed')
+            ch = 'unknown' if ch is None else (', '.join(ch) or 'nothing')
+            out.append(f"PRESS {p['key']}{',HELD_DOWN' if p['held'] else ''} -> {p['ack']}" + (f"\n   now: {st}" if st else '')
+                       + f"\n   changed: {ch}" + (f"\n   note: {p['note']}" if p.get('note') else ''))
+        out += [f"WARNING {w['code']}: {w['message']}" for w in o['warnings']]
         return '\n'.join(out)
-    emit({'ok': True, 'cmd': 'press', 'presses': presses}, text)
+    emit({'ok': True, 'cmd': 'press', 'presses': presses, 'warnings': press_warnings(presses)}, text)
 
 
 async def cmd_raw(args):

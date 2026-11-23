@@ -27,6 +27,7 @@ open289 is a GPL-3.0 Python package (`pip install open289`, commands `open289` a
 | `tests/` | pytest suite (`test_cli`, `test_decoders`, `test_mcp`, `test_sim`, `test_transport`), `conftest.py` isolation |
 | `tools/` | real-hardware investigation scripts (`probe_clear.py`, `gatt_dump.py`, `analyze_monitor.py`), not part of the package |
 | `docs/PROTOCOL.md` (+ `.zh-CN.md`) | the protocol reference with evidence levels |
+| `docs/UI.md` (+ `.zh-CN.md`) | the front-panel map: what each key does per dial position, menus, refusals, recipes, what is invisible (firmware V1.71) |
 | `.github/workflows/` | `ci.yml` (tests, package checks), `release.yml` (tag to PyPI) |
 | `re/`, `notes/`, `logs/` | local only, untracked (see invariants); some docstrings point into `notes/` |
 | `state/`, `data/` | runtime data in a checkout (locks, stop request, simulator state, jobs, logs); untracked |
@@ -63,7 +64,7 @@ Safety (hardware can be damaged or hung):
 Public API:
 
 9. The JSON output of the CLI and the MCP tool results are a public API, as are the exit codes in `errors.EXIT_CODES` and the error `code` strings. Adding a field is fine. Renaming or removing a field, changing a unit (values are SI base units) or reusing an exit code is a breaking change and needs a major or minor version bump and a README note. `tests/test_cli.py` and `tests/test_mcp.py` pin the contract.
-10. Do not change the meaning of `STOPPED` (exit 0) or the 5/6/7 groupings: 5 means the meter or adapter state (busy menu, detached, no data), 6 means link or protocol failure, 7 means refused for safety.
+10. Do not change the meaning of `STOPPED` (exit 0) or the 5/6/7 groupings: 5 means the meter or adapter state (a page that blocks queries, detached, no data), 6 means link or protocol failure, 7 means refused for safety.
 
 Repository hygiene:
 
@@ -81,7 +82,7 @@ python -m pytest tests -m "not hw" -q
 - `tests/conftest.py` has an autouse fixture: every test gets a fresh `OPEN289_HOME` (tmp_path), `OPEN289_SIM=1`, `OPEN289_NO_BLE=1`, a fast simulator (`OPEN289_SIM_RATE=40`, `OPEN289_SIM_DELAY=0.01`). A test must never reach a real adapter; do not undo this isolation. If you add a new environment variable that changes behaviour, set it in the fixture.
 - The simulator models measured behaviour: GATT table, arming by the CNX ID, the 18-byte write limit, pass-through framing, the out-buffer overflow and hang, binary record layouts, 16-byte live packets, front-panel key behaviour, single-connection semantics across processes (state, `.link` and `.ram` sidecars next to the state file), and an audit log of every GATT write (`python -m open289.sim audit`). Tests can assert that a forbidden write never happened by reading the audit log.
 - Try the tool by hand without hardware: `python -m open289 --sim info`, `read`, `live -n 3`. Reset the virtual meter with `python -m open289.sim reset`; `show`, `power-cycle` and `set key=value` inspect and change it.
-- When the hardware shows something new: first record it in `docs/PROTOCOL.md` with its evidence level, then teach `sim.py` to reproduce it, then add a test that fails without the fix. Anything in `sim.py` that was never observed on hardware is marked GUESS; keep that marking honest and never present a guess as verified.
+- When the hardware shows something new: first record it in `docs/PROTOCOL.md` (front-panel key behaviour: `docs/UI.md`; both languages) with its evidence level, then teach `sim.py` to reproduce it, then add a test that fails without the fix. Anything in `sim.py` that was never observed on hardware is marked GUESS; keep that marking honest and never present a guess as verified.
 - Hardware tests carry `@pytest.mark.hw` and are excluded by default (`addopts = "-m 'not hw'"`); run them deliberately with `pytest -m hw` with an IR3000 FC and a meter present. CI never runs them. There are none yet.
 - Tools for real-hardware investigation (all need a real address, none belong in CI):
   - `tools/gatt_dump.py <address>`: read-only dump of the GATT table; skips the firmware-update service and the characteristics with side effects, never writes.
@@ -93,7 +94,9 @@ python -m pytest tests -m "not hw" -q
 
 `docs/PROTOCOL.md` is the reference (the Chinese edition is `docs/PROTOCOL.zh-CN.md`; keep both in step). It tags every statement VERIFIED (seen on the hardware) or DERIVED (from the app, public sources or analogy; not exercised); sections cover the GATT table, the connection sequence, the live 8-byte record, adapter pass-through, the 287/289 serial protocol, timing and a safety summary. Change a protocol claim only with hardware evidence, and update the level.
 
-Open questions (section 9 of the document):
+`docs/UI.md` (Chinese edition `docs/UI.zh-CN.md`) is the front-panel map; read it before editing anything that describes keys, and update both languages whenever new key behaviour is observed. The `changed`, `note` and `warnings` fields of `open289 press` (and the MCP `press` tool) are public API (invariant 9), covered by `tests/test_cli.py` and `tests/test_mcp.py`.
+
+Open questions (section 9 of `docs/PROTOCOL.md`):
 
 - Does CLEAR (`0x81`) empty the out-buffer? Not verified; `pending_out` guards against it. `tools/probe_clear.py` is meant to settle it.
 - The real out-buffer capacity: 87 works, 181 fails, the limit lies in between.
@@ -107,7 +110,7 @@ Open questions (section 9 of the document):
 
 ## Release process
 
-1. Make sure CI is green on main and `docs/PROTOCOL.md`, the README and the MCP `INSTRUCTIONS` match the code.
+1. Make sure CI is green on main and `docs/PROTOCOL.md`, `docs/UI.md` (both languages), the README and the MCP `INSTRUCTIONS` match the code.
 2. Bump `open289.__version__` in `open289/__init__.py` (the only place; `pyproject.toml` reads it dynamically).
 3. Commit, then tag `vX.Y.Z` equal to the version and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 4. `release.yml` runs: `checks` (the full CI workflow) -> `build` (fails if the tag differs from `__version__`; builds sdist and wheel; `twine check --strict`) -> `github-release` (creates the GitHub release with the artifacts and generated notes) -> `pypi` (trusted publishing, no token, environment `pypi`).

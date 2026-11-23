@@ -309,7 +309,7 @@ recording   #0   'Save 4'         2026-11-06 21:40:19.248  V_DC  1.9874 V DC  72
 **Recording download.** `recording INDEX` fetches the trend records of one recording (the meter's RECORD mode) and
 writes one row per record. It batches up to 8 queries per round-trip and takes 0.44 s per record on the hardware
 (`--no-batch`: one per round-trip, about 1.4 s). A record that fails is retried (up to 3 more times). If the meter
-shows a menu, the download stops with `METER_BUSY` and a hint with the record to resume from; so does a failing
+shows a page that blocks queries (a result page or a saved-item viewer), the download stops with `METER_BUSY` and a hint with the record to resume from; so does a failing
 record (`PROTOCOL_ERROR`). Resume with the same `--out` and `--start K`: the file is appended to, without a second
 header. `--limit K` stops before record K (an end index, not a count). Events: `started`, `progress` every 10 s
 (`done`, `of`), and `done` (`records`, `duration_s`, `s_per_record`, `retries`, `file`).
@@ -340,13 +340,58 @@ open289 press ONOFF F1 --allow-off    # switch the meter off for good
 
 Options: `--held` sends a long press (`HELD_DOWN`) for every key; `--settle S` (default 1.0) waits that long before the
 state is read back; `--allow-off` permits ONOFF. Each entry of the result has `key`, `held`, `ack` (`OK`) and `state`
-(a display snapshot; or a text when the meter shows a page, see below). `press` stops at the first key the meter does
-not acknowledge. `press` is the only command that changes the meter's state (apart from `raw --unsafe`).
+(a display snapshot; or a text when the meter shows a page that blocks queries, see below, or the link closed). `press`
+stops at the first key the meter does not acknowledge. `press` is the only command that changes the meter's state
+(apart from `raw --unsafe`).
 
 ```
 $ open289 --sim press HOLD
-{"ok":true,"cmd":"press","presses":[{"key":"HOLD","held":false,"ack":"OK","state":{"function":"V_DC","secondary_function":"NONE","autorange":true,"range":5.0,"unit":"VDC","modes":[],...}}]}
+{"ok":true,"cmd":"press","presses":[{"key":"HOLD","held":false,"ack":"OK","state":{"function":"V_DC","secondary_function":"NONE","autorange":true,"range":5.0,"unit":"VDC","modes":["HOLD"],...},"changed":["modes"]}],"warnings":[]}
 ```
+
+**What changed.** Before the first key `press` reads the display state once (`QDDB`) as a baseline, and after each key
+(after `--settle`) it reads it again. Each entry therefore also has:
+
+- `changed`: the display-state fields that differ from the state before the key, out of `function`,
+  `secondary_function`, `autorange`, `range`, `unit`, `modes`, `minmax_start`, plus `db_ref` and `temp_offset` when both
+  states carry them. `[]` means nothing visible changed; `["view"]` means a blocking page (result page, saved-item
+  viewer) opened or closed; `null` means it cannot be told (both sides blocked, or a side unknown; always on ONOFF,
+  power-off and link-closed entries, and on the key after ONOFF). In autorange a range move caused by the input is not
+  counted.
+- `note` (only when needed): what the key probably did when the state shows nothing, for example a soft key with no
+  visible change (a menu or panel may have opened, moved or closed, or a choice was refused: look before the next soft
+  key, a blind F4 can open Setup), F2 Save switching HOLD on (the Save panel holds the reading), UP/DOWN without change
+  (cursor or value, or LCD contrast, including the saved-item viewers), LEFT/RIGHT, INFO (the help is invisible; F4
+  closes it), HOLD in AutoHOLD (takes a new value, stays in AutoHOLD), or HOLD, MINMAX or RANGE that changed nothing
+  (ignored: not available in this function or mode, or a page that blocks keys, such as the lead alert). RANGE held in
+  autorange is not flagged.
+- top-level `warnings`, a list of `{code, message}`: `KEY_IGNORED` (a HOLD, MINMAX or RANGE had no effect),
+  `LEAD_ALERT_POSSIBLE` (such an ignored key in a current function, `A_*`, `MA_*`, `UA_*`, unless REL explains an
+  ignored RANGE or a running recording explains an ignored MINMAX; see the lead alert below) and
+  `MENU_STATE_UNKNOWN` (the last key that can close a menu was a soft key that changed nothing or opened the Save panel,
+  so a menu may still be open).
+
+If the last key is a soft key and nothing changed, `press` waits another settle period (at least 1 s) and reads again
+before deciding (some choices, such as low-pass, take more than 1 s). If the link drops mid-sequence, `press` stops and
+keeps the presses made so far; the last entry has the state `link closed (meter switched off, or the adapter went out of
+range)`, or the ack `LINK_CLOSED` with the state `meter powering off` when the key itself could not be sent. These
+fields are additive. `--text` prints `changed: ...` (or `nothing` / `unknown`), `note:` and
+`WARNING CODE: message` lines.
+
+```
+$ open289 --sim press F4
+{"ok":true,"cmd":"press","presses":[{"key":"F4","held":false,"ack":"OK","state":{...},"changed":[],"note":"display state unchanged: a menu or panel may have opened, ..."}],"warnings":[{"code":"MENU_STATE_UNKNOWN","message":"a soft key left the display state unchanged ..."}]}
+```
+
+**Lead alert: a blind spot.** On the A position with no lead in the mA or A jack (or leads in both), and on uA with a
+lead in the A jack, the meter shows `WARNING / Leads connected incorrectly.`, blanks the soft keys, forces the
+backlight bright and ignores keys. Over the protocol nothing shows: the live packet, `QDDB`, `QM` and `QDDA` report a
+normal near-zero current, state `NORMAL` (over the protocol only the A position with no lead was observed; the other
+cases were seen on the meter). Every position other than A and uA wants the mA and A jacks empty. Agents must ask the user
+to check the leads when a current reading is suspicious or keys are ignored.
+
+[docs/UI.md](docs/UI.md) ([中文](docs/UI.zh-CN.md)) is the key map per dial position (what each key does, menus,
+refusals, recipes, what is invisible), observed on firmware V1.71.
 
 What was observed on the hardware:
 
@@ -354,10 +399,15 @@ What was observed on the hardware:
 - **MIN MAX has pages.** The first `MINMAX` starts MIN MAX (`modes` has `MIN_MAX_AVG`). The second stops it and opens
   the **result page** (F1 restart, F2 save, `MINMAX` or F4 close). F2 on the result page opens the **save page** (F1
   adds to the name, F2 saves, F4 closes). Closing a page returns to the measurement screen.
-- **Why queries return `METER_BUSY` there.** While a menu, result page, save page or setup screen is open, the meter
-  answers every measurement query (`QDDB`, `QSLS`, ...) with an execution error. open289 names it `METER_BUSY`
-  (exit 5). `press` then shows `"state": "menu / result page open (measurement queries blocked)"`. Close the page
-  with the keys (`F4`) or on the meter, then retry.
+- **Menus do not block queries.** The Menu, the Save panel, the View Memory / Delete Memory lists, the Setup panel and
+  its pages and the INFO help overlay the reading, but `QDDB` keeps answering as on the measurement screen (with HOLD
+  on while the Save panel is open). Verified on firmware V1.71.
+- **Why queries return `METER_BUSY`.** The meter answers measurement queries (`QDDB`, `QSLS`, ...) with an execution
+  error on the saved-item viewers (View Mem), the MIN MAX and recording result pages (the Peak result page was not
+  checked), the save page opened from a result page, the power-off confirmation, and briefly during a dial change.
+  open289 names it `METER_BUSY` (exit 5). `press` then shows `"state": "menu / result page open (measurement queries
+  blocked)"` (historical wording; it means a result page or viewer). Close the page with the keys (usually `F4`) or on
+  the meter, then retry.
 - `BACKLIGHT` cycles off, bright, dim, also on the pages.
 - `ONOFF` is refused (`UNSAFE_OPERATION`, exit 7) unless `--allow-off`. With it, the meter asks for confirmation
   (`turning off meter will break communication`): `F1` confirms, `F4` cancels. After F1 the meter is off, the
@@ -395,7 +445,7 @@ is that of the first error (7 for a refusal). A command over 87 bytes is refused
 | S03 | meter attached (`FLUKE 287/289`, not the detached `FLUKE PC3000`) |
 | S04 | adapter firmware answers |
 | S05 | pass-through `ID` |
-| S06 | display snapshot (`QDDB`) decodes (the meter must be on its measurement screen) |
+| S06 | display snapshot (`QDDB`) decodes (fails while a result page or saved-item viewer is open; menus and Setup do not matter) |
 | S07 | a live reading arrives within 5 s |
 | S08 | adapter battery >= 20 % |
 | S09 | meter battery not EMPTY / ALMOST_EMPTY |
@@ -489,7 +539,7 @@ stderr. Values are in SI base units; `display` is the text from the meter. Times
 Errors are one object and a non-zero exit code:
 
 ```
-{"ok":false,"cmd":"read","error":{"code":"METER_BUSY","message":"'QDDB' -> EXECUTION_ERROR","hint":"the meter is on a menu, result page or setup screen: close it on the meter (or with open289 press), then retry"}}
+{"ok":false,"cmd":"read","error":{"code":"METER_BUSY","message":"'QDDB' -> EXECUTION_ERROR","hint":"the meter shows a page that blocks queries (a MIN MAX / Peak / recording result page or a saved-item viewer): close it on the meter (or with open289 press, usually F4), then retry"}}
 ```
 
 `--text` prints a human-readable form of the same data: one line per reading for `live` (`HH:MM:SS.mmm  value unit`
@@ -506,7 +556,7 @@ Every error has a `code`, a `message` and (mostly) a `hint`; the exit code follo
 | `INVALID_ARG` | 2 | an argument cannot be parsed or is out of range (duration, key, index): fix the command |
 | `NOT_FOUND` | 3 | no IR3000 FC is advertising: wake the adapter (button until the LED flashes green), come closer, close Fluke Connect on phones |
 | `BUSY` | 4 | another open289 process holds the adapter (wait, or `open289 stop`); in the MCP server also a running background log |
-| `METER_BUSY` | 5 | the meter answers EXECUTION_ERROR: a menu, result page, save page or setup screen is open; close it on the meter or with `press F4` |
+| `METER_BUSY` | 5 | the meter answers EXECUTION_ERROR: a result page (MIN MAX, recording), a saved-item viewer or the power-off confirmation is open; close it on the meter or with `press F4` |
 | `DETACHED` | 5 | the adapter reports no powered meter (per the Fluke app it then reports `FLUKE PC3000`; not observed on hardware): seat it on the IR port, switch the meter on |
 | `NO_DATA` | 5 | the meter has no data for the request, e.g. no saved item with that index: check `memory` |
 | `TIMEOUT` | 6 | a one-shot command passed `--max-wall`, or no reading for `--timeout` seconds: move closer, check the meter is on, raise `--max-wall` |
@@ -546,7 +596,7 @@ so the adapter is connected and released per call, a hang never blocks the serve
 | `live` | `live` | `count` (20, 1..400), `seconds` (0.1..120; with `count`: whichever comes first), `max_wall`. A **summary** instead of the lines: count, rate, first / last time, min / max / mean of the primary per unit, functions and units seen, the last 5 readings |
 | `memory` | `memory` | `max_wall` (600). Counts and every saved item |
 | `download_recording` | `recording` | `index` (required), `out`, `format`, `start` (0), `limit`, `max_wall` (900). File, number of records, seconds per record, retries, the recording header. A failed result carries `resume` with the `start` and `out` to continue with |
-| `press` | `press` | `keys` (required, 1..20 of `F1 F2 F3 F4 UP DOWN LEFT RIGHT HOLD MINMAX RANGE INFO BACKLIGHT ONOFF`), `held` (false), `allow_off` (false), `max_wall`. The display state after each key |
+| `press` | `press` | `keys` (required, 1..20 of `F1 F2 F3 F4 UP DOWN LEFT RIGHT HOLD MINMAX RANGE INFO BACKLIGHT ONOFF`), `held` (false), `allow_off` (false), `max_wall`. The display state after each key, with `changed` and `note`, plus top-level `warnings` (`KEY_IGNORED`, `LEAD_ALERT_POSSIBLE`, `MENU_STATE_UNKNOWN`), as for the CLI |
 | `query` | `raw` | `commands` (required, 1..10, e.g. `["ID","QM"]`), `max_wall`. Read-only: `ID`, `IM`, `Q*`; anything else is refused with `UNSAFE_OPERATION` before it reaches the meter (there is no `--unsafe` in MCP) |
 | `selftest` | `selftest` | `max_wall`. The checks S01-S09; a failure returns `SELFTEST_FAILED` with the failed checks |
 | `log_start` | `log` in the background | `duration` (`10m`; `forever` = until `log_stop`; must be > 0), `every` (`0`), `snapshot_every` (`0`), `out`, `format`, `reconnect_for` (`5m`). Returns a job id and the file |
@@ -564,7 +614,7 @@ the tool results are summaries and never hundreds of readings.
 
 **BUSY rules.** The adapter accepts one connection, so tools run one at a time, and **while a background log runs,
 every other meter tool (`status`, `read`, `live`, `memory`, `press`, `query`, ...) returns `BUSY`** until `log_stop`
-(`log_status` and `log_stop` still work). `BUSY` also means another open289 (a terminal running `live`/`log`, another client) holds the adapter. Fluke Connect on a phone shows up as `NOT_FOUND` (the adapter stops advertising). `METER_BUSY` is different: a menu or result page is open on the meter; close it
+(`log_status` and `log_stop` still work). `BUSY` also means another open289 (a terminal running `live`/`log`, another client) holds the adapter. Fluke Connect on a phone shows up as `NOT_FOUND` (the adapter stops advertising). `METER_BUSY` is different: a result page or saved-item viewer (a page that blocks queries; menus and Setup do not) is open on the meter; close it
 (`press` `F4`) and retry. Safety for agents: `press` changes the meter (HOLD, MIN MAX, range); `ONOFF` needs
 `allow_off: true` and should be used only when the user asked for it: it switches the meter off for good, and the
 adapter goes to sleep with it.
@@ -597,6 +647,7 @@ Layout:
 - `tests/` offline tests against the virtual meter: decoders (against real captures), the transport and its safety
   rules, the CLI, the MCP server (JSON-RPC, jobs, BUSY rules) and the simulator itself.
 - `docs/PROTOCOL.md` (and `PROTOCOL.zh-CN.md`): the protocol, with evidence levels.
+- `docs/UI.md` (and `UI.zh-CN.md`): the front-panel key map per dial position, observed on firmware V1.71.
 - `tools/` diagnostic scripts for the hardware.
 - `.github/workflows/`: `ci.yml` and `release.yml`.
 

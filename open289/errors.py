@@ -4,7 +4,7 @@ EXIT_CODES = {
     'INVALID_ARG': 2,
     'NOT_FOUND': 3,          # no IR3000 FC advertising (asleep, out of range, or connected to a phone)
     'BUSY': 4,               # another open289 process holds the adapter
-    'METER_BUSY': 5,         # the meter answers EXECUTION_ERROR: a menu / result page / setup screen is open
+    'METER_BUSY': 5,         # the meter answers EXECUTION_ERROR: a result page or saved-item viewer is open
     'DETACHED': 5,           # the adapter is not attached to a powered meter
     'NO_DATA': 5,            # the meter has no data for the request (ack 5)
     'TIMEOUT': 6,

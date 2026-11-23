@@ -287,9 +287,13 @@ def test_press_hold_then_read(mcp):
     pr = doc(mcp.call('press', {'keys': ['HOLD']}))
     assert [(p['key'], p['held'], p['ack']) for p in pr['presses']] == [('HOLD', False, 'OK')]
     assert 'HOLD' in pr['presses'][0]['state']['modes'] and 'readings' not in pr['presses'][0]['state']
+    assert pr['presses'][0]['changed'] == ['modes'] and pr['warnings'] == []
     assert 'HOLD' in doc(mcp.call('read'))['modes']
     assert doc(mcp.call('press', {'keys': ['hold']}))['presses'][0]['key'] == 'HOLD'     # keys are case-insensitive
     assert 'HOLD' not in doc(mcp.call('read'))['modes']
+    sk = doc(mcp.call('press', {'keys': ['F1']}))            # Menu on the measurement screen: invisible, so flagged
+    assert sk['presses'][0]['changed'] == [] and sk['presses'][0]['note']
+    assert [w['code'] for w in sk['warnings']] == ['MENU_STATE_UNKNOWN']
 
 
 def test_press_onoff_needs_allow_off(mcp):

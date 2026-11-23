@@ -160,6 +160,124 @@ def test_press_minmax_save(capsys):
     assert o['saved']['minmax'] == 1
 
 
+def test_press_reports_changes(capsys):
+    code, o = one(capsys, 'press', 'HOLD', 'HOLD', 'RANGE', 'RANGE', '--settle', '0')
+    assert code == 0
+    ch = [p['changed'] for p in o['presses']]
+    assert ch[0] == ['modes'] and ch[1] == ['modes'] and 'autorange' in ch[2] and ch[3] == ['range']
+    assert not any('note' in p for p in o['presses']) and o['warnings'] == []
+    code, o = one(capsys, 'press', 'MINMAX', 'MINMAX', 'F4', '--settle', '0')
+    ch = [p['changed'] for p in o['presses']]
+    assert 'modes' in ch[0] and ch[1:] == [['view'], ['view']]   # session started, result page and back
+
+
+def test_press_soft_key_without_visible_change(capsys):
+    """Menus are invisible over the protocol: a soft key that changes nothing gets a note and a warning."""
+    code, o = one(capsys, 'press', 'F1', '--settle', '0')
+    p = o['presses'][0]
+    assert code == 0 and p['changed'] == [] and 'menu' in p['note']
+    assert [w['code'] for w in o['warnings']] == ['MENU_STATE_UNKNOWN']
+    code, o = one(capsys, 'press', 'UP', 'DOWN', 'LEFT', 'INFO', 'BACKLIGHT', '--settle', '0')
+    notes = [p.get('note') for p in o['presses']]
+    assert 'contrast' in notes[0] and 'contrast' in notes[1] and 'cursor' in notes[2] and 'help' in notes[3]
+    assert notes[4] is None and o['warnings'] == []        # BACKLIGHT: nothing to report
+
+
+def test_press_ignored_key(capsys):
+    sim_set(function='DIODE_TEST', autorange=False, range_index=0)   # fixed range: RANGE does nothing
+    code, o = one(capsys, 'press', 'RANGE', '--settle', '0')
+    p = o['presses'][0]
+    assert code == 0 and p['state']['function'] == 'DIODE_TEST' and p['changed'] == [] and 'no effect' in p['note']
+    assert [w['code'] for w in o['warnings']] == ['KEY_IGNORED']
+    code, o = one(capsys, 'press', 'RANGE', '--held', '--settle', '0')  # RANGE held in a fixed range: also ignored
+    assert o['presses'][0]['changed'] == []
+
+
+def test_press_range_held_in_autorange_is_not_flagged(capsys):
+    code, o = one(capsys, 'press', 'RANGE', '--held', '--settle', '0')
+    assert o['presses'][0]['changed'] == [] and 'note' not in o['presses'][0] and o['warnings'] == []
+
+
+def test_press_text_output(capsys):
+    code = cli.main(['--text', 'press', 'HOLD', 'F1', '--settle', '0'])
+    out = capsys.readouterr().out
+    assert code == 0 and 'changed: modes' in out and 'changed: nothing' in out and 'WARNING MENU_STATE_UNKNOWN' in out
+    cli.main(['press', 'HOLD', '--settle', '0'])           # release HOLD
+    capsys.readouterr()
+
+
+ST = {'function': 'V_DC', 'secondary_function': 'NONE', 'autorange': True, 'range': 5.0, 'unit': 'VDC', 'modes': []}
+
+
+def _p(key, before, after, held=False):
+    ch = cli.press_changes(before, after)
+    p = {'key': key, 'held': held, 'ack': 'OK', 'state': after, 'changed': ch}
+    note = cli.press_note(key, held, before, ch, after)
+    if note:
+        p['note'] = note
+    return p
+
+
+def codes(presses):
+    return [w['code'] for w in cli.press_warnings(presses)]
+
+
+def test_press_autorange_drift_is_not_a_key_effect():
+    drift = dict(ST, range=50.0)
+    p = _p('F1', ST, drift)
+    assert p['changed'] == [] and p['note'] == cli.PRESS_NOTES['soft'] and codes([p]) == ['MENU_STATE_UNKNOWN']
+    man = dict(ST, autorange=False)
+    assert cli.press_changes(man, dict(man, range=50.0)) == ['range']              # a manual RANGE step counts
+    assert cli.press_changes(ST, dict(ST, autorange=False)) == ['autorange']       # RANGE: auto -> manual, same range
+
+
+def test_press_minmax_restart_and_settings_are_changes():
+    mm = dict(ST, modes=['MIN_MAX_AVG'], minmax_start='2026-11-22 19:25:57.000')
+    assert cli.press_changes(mm, dict(mm, minmax_start='2026-11-22 19:26:30.000')) == ['minmax_start']
+    dbm = dict(ST, function='V_AC', secondary_function='DBM',
+               readings=[{'id': 'DB_REF', 'value': 600.0}, {'id': 'PRIMARY', 'value': -11.0}])
+    up = dict(dbm, readings=[{'id': 'DB_REF', 'value': 1000.0}, {'id': 'PRIMARY', 'value': -13.2}])
+    assert cli.press_changes(dbm, up) == ['db_ref']                                 # dBm Ref editor: UP applies at once
+
+
+def test_press_autohold_and_explained_ignores():
+    ah = dict(ST, function='MA_DC', modes=['AUTO_HOLD'])
+    p = _p('HOLD', ah, dict(ah))
+    assert p['note'] == cli.PRESS_NOTES['autohold'] and codes([p]) == []         # accepted: takes a new value
+    rel = dict(ST, function='MA_DC', autorange=False, modes=['REL'])
+    p = _p('RANGE', rel, dict(rel))
+    assert codes([p]) == ['KEY_IGNORED']                                           # REL locks the range: no lead alert
+    rec = dict(ST, function='A_DC', modes=['RECORD'])
+    assert codes([_p('MINMAX', rec, dict(rec))]) == ['KEY_IGNORED']
+
+
+def test_press_save_panel_and_cursor_keys_keep_menu_warning():
+    held = dict(ST, modes=['HOLD'])
+    p = _p('F2', ST, held)
+    assert p['changed'] == ['modes'] and p['note'] == cli.PRESS_NOTES['save_panel']
+    assert codes([p]) == ['MENU_STATE_UNKNOWN']
+    seq = [_p('F1', ST, dict(ST)), _p('DOWN', ST, dict(ST)), _p('RIGHT', ST, dict(ST))]
+    assert codes(seq) == ['MENU_STATE_UNKNOWN']                                    # cursor keys do not close a menu
+    assert codes(seq + [_p('HOLD', ST, held)]) == []
+    view = cli.BLOCKED_STATE                                                       # saved-item viewer
+    assert _p('UP', view, view)['note'] == cli.PRESS_NOTES['updown']              # contrast changes, invisibly
+
+
+def test_press_warnings_lead_alert():
+    """The lead-alert page blocks keys in current functions and does not show in QDDB (verified on hardware)."""
+    st = {'function': 'MA_DC', 'secondary_function': 'NONE', 'autorange': True, 'range': 50.0, 'unit': 'ADC',
+          'modes': []}
+    p = {'key': 'HOLD', 'held': False, 'ack': 'OK', 'state': st, 'changed': cli.press_changes(st, dict(st))}
+    p['note'] = cli.press_note('HOLD', False, st, p['changed'])
+    assert p['changed'] == [] and p['note']
+    assert [w['code'] for w in cli.press_warnings([p])] == ['KEY_IGNORED', 'LEAD_ALERT_POSSIBLE']
+    volt = dict(p, state=dict(st, function='DIODE_TEST'))
+    assert [w['code'] for w in cli.press_warnings([volt])] == ['KEY_IGNORED']
+    assert cli.press_changes('menu / result page open (measurement queries blocked)', st) == ['view']
+    assert cli.press_changes(cli.BLOCKED_STATE, cli.BLOCKED_STATE) is None
+    assert cli.press_changes({'code': 'UNAVAILABLE'}, st) is None
+
+
 def test_meter_busy_on_result_page(capsys):
     run(capsys, 'press', 'MINMAX', 'MINMAX', '--settle', '0')
     code, o = one(capsys, 'read')

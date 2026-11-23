@@ -10,7 +10,7 @@ Every statement is tagged with how it is known.
 
 | Tag | Meaning |
 |---|---|
-| VERIFIED | Observed on real hardware on 2026-11-06: IR3000 FC radio firmware 01.00.01, MSP firmware 01.00.15, Fluke 289 firmware V1.71, Windows PC with built-in Bluetooth (bleak over WinRT). Only a 289 was tested. |
+| VERIFIED | Observed on real hardware. First session, 2026-11-06: IR3000 FC radio firmware 01.00.01, MSP firmware 01.00.15, Fluke 289 firmware V1.71, Windows PC with built-in Bluetooth (bleak over WinRT). Second session, 2026-11-22: the Fluke 289 V1.71 through the IR3000 FC, a walk through the front-panel keys on every dial position, each key checked on the LCD and with a QDDB query ([UI.md](UI.md)). Statements from the second session carry its date. Only a 289 was tested. |
 | DERIVED | Taken from the Fluke Connect app, from public sources about the 287/289 serial protocol, or from naming and analogy, but not exercised against the hardware. Treat it as a hypothesis. |
 
 Example values used in this document: adapter address `FA:28:90:00:00:01`, meter serial `12345678`. They are placeholders, not real devices.
@@ -166,7 +166,7 @@ State (4 bits). VERIFIED codes are marked; the rest are DERIVED.
 | 5 | OL_A2D | `OL` | |
 | 6 | OPEN_TC | `Open TC` | |
 | 7 | DISCHARGE | | |
-| 8 | LEADS | | |
+| 8 | LEADS | | not for the lead alert: the 289 (V1.71) keeps state NORMAL while it shows "Leads connected incorrectly" (6.9) |
 | 9 | GREATER_THAN | `> number` | |
 | 10 | MISSING_PHASE | | |
 | 11 | ERROR | | |
@@ -529,11 +529,15 @@ The average-is-a-sum rule. The meter stores the sum of n samples in the AVERAGE 
 
 ### 6.9 What returns EXECUTION_ERROR
 
-VERIFIED. While a menu, result page or save dialog is open on the meter, all measurement queries (QM, QDDA, QDDB) and also QSLS return ack `2`. It also happens briefly (a few polls) during dial changes. After closing the page on the meter, or with a key press (6.10), queries work again. DERIVED: saved-data queries (QSMR, QMMSI, QPSI, QRSI, QSRR) were not sent while such a page was open (the listing stops at QSLS); expect ack 2 for them as well. DERIVED: public sources report `2` while the meter is in setup mode.
+VERIFIED (2026-11-22, Fluke 289 firmware V1.71). Menus do not block queries. The Menu, the Save panel, the View Memory and Delete Memory lists, the Setup panel with its pages and the INFO help all overlay the reading, and QDDB keeps answering as on the measurement screen (with the HOLD mode bit on while the Save panel is open). Ack `2` (open289: `METER_BUSY`, exit 5) comes from these pages: the saved-item viewers (View Mem), the MIN MAX and recording result pages (the Peak result page was not checked), the save page opened from a result page, and the power-off confirmation. It also happens briefly (a few polls) during dial changes. The measurement queries (QM, QDDA, QDDB) and also QSLS returned ack `2` on the MIN MAX result and save pages (2026-11-06); on the saved-item viewers and the recording result page QDDB was checked (2026-11-22). DERIVED: expect ack `2` from all four on every page listed. After closing the page on the meter, or with a key press (6.10, usually `F4`), queries work again. DERIVED: saved-data queries (QSMR, QMMSI, QPSI, QRSI, QSRR) were not sent while such a page was open (the listing stops at QSLS); expect ack 2 for them as well. VERIFIED for V1.71, contrary to public sources, which report `2` while the meter is in setup mode: Setup answers queries normally on this firmware (other firmware generations were not tested). The state text of `open289 press` keeps its historical wording "menu / result page open (measurement queries blocked)"; it now means a result page or a viewer, not an ordinary menu.
+
+Consequence: a client cannot see from the query results whether a menu or panel is open, because the display state looks the same. See [UI.md](UI.md) for what each key does on each dial position and what stays invisible.
+
+Lead alert, VERIFIED (2026-11-22, V1.71). On the A position with no lead in the mA or A jack (or leads in both), and on the uA position with a lead in the A jack, the meter shows "WARNING / Leads connected incorrectly.", blanks the soft-key labels, forces the backlight bright and ignores keys. Every other position expects the mA and A jacks to be empty, otherwise the same warning appears. Over the protocol nothing shows: the live packet, QDDB, QM and QDDA report a normal near-zero current with state NORMAL, and none of these four returns an error. This was observed over the protocol for the A position with no lead in either current jack; the other cases were checked on the meter screen only. In a current function (`A_*`, `MA_*`, `UA_*`), a HOLD, MINMAX or RANGE that changes nothing, together with a near-zero reading, is the only hint. `open289 press` then reports the warning `LEAD_ALERT_POSSIBLE` (besides `KEY_IGNORED`), except when REL explains an ignored RANGE or a running recording explains an ignored MINMAX; on the other positions it reports only `KEY_IGNORED`. Ask the user to check the leads.
 
 ### 6.10 PRESS keys and the screen state machine
 
-`PRESS <key>` simulates a press; `PRESS <key>,HELD_DOWN` a long press. The reply is only the ack (`0`). Keys (from the meter's buttonName table): `F1 F2 F3 F4 UP DOWN LEFT RIGHT HOLD MINMAX RANGE INFO BACKLIGHT ONOFF`. VERIFIED on hardware: HOLD, MINMAX, RANGE (also held), BACKLIGHT, F2, F4, and ONOFF followed by F1 (power-off). F3, UP, DOWN, LEFT, RIGHT and INFO were not exercised. DERIVED from public sources: the other press types in the meter's table are RELEASED and REPEATED. A press returns before the screen changes, so a client should wait about a second and then check the display state. open289 waits 1.0 s by default.
+`PRESS <key>` simulates a press; `PRESS <key>,HELD_DOWN` a long press. The reply is only the ack (`0`). Keys (from the meter's buttonName table): `F1 F2 F3 F4 UP DOWN LEFT RIGHT HOLD MINMAX RANGE INFO BACKLIGHT ONOFF`. VERIFIED on hardware: all 14 keys (HOLD, MINMAX, RANGE, BACKLIGHT, F2, F4, and ONOFF followed by F1 (power-off) on 2026-11-06; F1, F3, UP, DOWN, LEFT, RIGHT and INFO on 2026-11-22). Held: RANGE and MINMAX (2026-11-06); F2, F4, HOLD, MINMAX, BACKLIGHT, INFO, and LEFT/RIGHT in the Trend view of a recording (2026-11-22). The full key map per dial position (menus, refusals, recipes, what is invisible), observed on firmware V1.71, is in [UI.md](UI.md). DERIVED from public sources: the other press types in the meter's table are RELEASED and REPEATED. A press returns before the screen changes, so a client should wait about a second and then check the display state. open289 waits 1.0 s by default. Some menu choices (low-pass) take more than 1 s; open289 reads the state again after another settle period (at least 1 s) when the last key is a soft key that changed nothing.
 
 Effects verified on the 289 (V DC range 5, auto):
 
@@ -552,10 +556,12 @@ Screen state machine for min/max, VERIFIED. "Queries" means measurement queries.
 |---|---|---|---|
 | Measurement screen | OK | `MINMAX` | MIN MAX running |
 | MIN MAX running | OK, mode MIN_MAX_AVG | `MINMAX` (or held) | Result page |
-| Result page | EXECUTION_ERROR | `F1` restart; `F2` save; `MINMAX` or `F4` close | Running again; save page; measurement screen |
-| Save page (opened from the result page with F2) | EXECUTION_ERROR | `F1` +name (not exercised); `F2` Save; `F4` Close | name entry (untested); saves and stays on the save page; measurement screen |
+| Result page (MIN MAX; the Peak result page was not checked) | EXECUTION_ERROR | `F1` restart; `F2` save; `MINMAX` or `F4` close | Running again; save page; measurement screen (the unsaved values are dropped) |
+| Save page (opened from the result page with F2) | EXECUTION_ERROR | `F1` +name (not exercised); `F2` Save; `F4` Close | name entry (untested); saves, queries stay blocked (see below); result page (2026-11-22, [UI.md](UI.md) 3.3) |
 
-After `F2` (Save) and then `F4` on the save page, QSLS shows one more min/max entry (the min/max count went from 0 to 1 in the test), and queries work again. A backlight press on the save page changes nothing visible.
+After `F2` (Save) and then `F4`, QSLS shows one more min/max entry (the min/max count went from 0 to 1 in the test), and queries work again (2026-11-06). Where the meter goes after `F2` Save was not recorded: the save page and the result page both block queries. Since `F4` Close on the save page returns to the result page (2026-11-22), DERIVED: `F2` Save most likely returns to the result page, and the `F4` that followed closed the result page (the simulator models it this way). After saving, press `F4` once and read the state again, repeating while it stays blocked (UI.md, recipe "Start, stop and save MIN MAX"). A backlight press on the save page changes nothing visible.
+
+Recording result page ("Stopped" + "Recording", 2026-11-22, [UI.md](UI.md) 3.6), shown when a recording ends or is stopped: EXECUTION_ERROR. `F2` Save opens the Save panel; `F3` Trend opens the Trend view (also blocked; `F3` there returns to the summary); `F4` Close closes it and discards the recording unless it was saved. `F1` has no label (no Restart).
 
 ### 6.11 Power off
 
@@ -604,6 +610,7 @@ A full display snapshot (QDDB) is one pass-through, so display polling realistic
 | Never send adapter opcodes `90` to `94`. | They control a high-voltage insulation test on 1550/1555 testers. |
 | Never send more than 87 bytes to the meter in one send. | 181 bytes got no reply; 373 bytes or more hung the adapter until power-cycled. |
 | Pass only query commands by default (`ID`, `IM`, `Q...`). | `MP`, `CSD` (clears memory) and `RI` (reset) change or erase meter state. The exception is `PRESS`, restricted to the 14 listed keys. |
+| Treat a normal reading as unproven on the A and uA positions (and on any position when a lead may be in the mA or A jack). | The lead alert (6.9) shows a warning on the meter, blanks the soft-key labels and ignores keys, but queries report a normal near-zero current (observed over the protocol on the A position). Ask the user to check the leads. |
 | Block `ONOFF` unless explicitly allowed. | Powering off breaks communication and cannot be undone remotely. The meter asks for confirmation. |
 | Never accept non-ASCII command text. | The adapter forwards bytes as they are and the meter's reaction is undefined. |
 | Treat `OFF` as destructive. | It powers the meter off at once, without asking. |

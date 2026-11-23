@@ -10,7 +10,7 @@
 
 | 标签 | 含义 |
 |---|---|
-| VERIFIED | 于 2026-11-06 在真实硬件上观察到：IR3000 FC 射频固件 01.00.01，MSP 固件 01.00.15，Fluke 289 固件 V1.71，使用内置蓝牙的 Windows PC（bleak，基于 WinRT）。仅测试了 289。 |
+| VERIFIED | 在真实硬件上观察到。第一次测试，2026-11-06：IR3000 FC 射频固件 01.00.01，MSP 固件 01.00.15，Fluke 289 固件 V1.71，使用内置蓝牙的 Windows PC（bleak，基于 WinRT）。第二次测试，2026-11-22：通过 IR3000 FC 连接 Fluke 289 V1.71，在每个拨盘位置上逐一遍历前面板按键，每个按键都在 LCD 上并用 QDDB 查询加以核对（[UI.zh-CN.md](UI.zh-CN.md)）。来自第二次测试的陈述都注明了日期。仅测试了 289。 |
 | DERIVED | 来自 Fluke Connect 应用、关于 287/289 串口协议的公开资料，或由命名和类比推得，但未在硬件上实测。应视为假设。 |
 
 本文使用的示例值：适配器地址 `FA:28:90:00:00:01`，万用表序列号 `12345678`。它们只是占位符，并非真实设备。
@@ -166,7 +166,7 @@ value       = 50649 * 10^(0-4) = 5.0649   ->  "5.0649 V DC"
 | 5 | OL_A2D | `OL` | |
 | 6 | OPEN_TC | `Open TC` | |
 | 7 | DISCHARGE | | |
-| 8 | LEADS | | |
+| 8 | LEADS | | 不用于表笔报警：289（V1.71）显示 "Leads connected incorrectly" 时状态仍为 NORMAL（6.9） |
 | 9 | GREATER_THAN | `> number` | |
 | 10 | MISSING_PHASE | | |
 | 11 | ERROR | | |
@@ -529,11 +529,15 @@ VERIFIED。固定 146 字节的载荷；在线路上回复为 `0` CR `#0` + 146 
 
 ### 6.9 哪些情况会返回 EXECUTION_ERROR
 
-VERIFIED。当万用表上打开了菜单、结果页或保存对话框时，所有测量查询（QM、QDDA、QDDB）以及 QSLS 都返回 ack `2`。在转动旋钮期间也会短暂（几次轮询）出现这种情况。在万用表上关闭该页面后，或通过按键（6.10），查询即可恢复工作。DERIVED：在这类页面打开期间没有发送已保存数据的查询（QSMR、QMMSI、QPSI、QRSI、QSRR）（列表止于 QSLS）；预计它们同样返回 ack 2。DERIVED：公开资料报告称，万用表处于设置模式时返回 `2`。
+VERIFIED（2026-11-22，Fluke 289 固件 V1.71）。菜单不会阻止查询。Menu、Save 面板、View Memory 和 Delete Memory 列表、Setup 面板及其各页，以及 INFO 帮助，都只是叠加在读数之上，QDDB 照常应答，与在测量屏幕上一样（Save 面板打开时 HOLD 模式位为开）。ack `2`（open289：`METER_BUSY`，退出码 5）来自这些页面：已保存项查看器（View Mem）、MIN MAX 和记录结果页（Peak 结果页未检查）、从结果页打开的保存页，以及关机确认。在转动旋钮期间也会短暂（几次轮询）出现这种情况。测量查询（QM、QDDA、QDDB）以及 QSLS 在 MIN MAX 结果页和保存页上都返回了 ack `2`（2026-11-06）；在已保存项查看器和记录结果页上检查的是 QDDB（2026-11-22）。DERIVED：预计这四条查询在上列每个页面上都返回 ack `2`。在万用表上关闭该页面后，或通过按键（6.10，通常是 `F4`），查询即可恢复工作。DERIVED：在这类页面打开期间没有发送已保存数据的查询（QSMR、QMMSI、QPSI、QRSI、QSRR）（列表止于 QSLS）；预计它们同样返回 ack 2。VERIFIED（V1.71），与公开资料相反（公开资料称万用表处于设置模式时返回 `2`）：在该固件上 Setup 正常应答查询（其他固件世代未测试）。`open289 press` 的状态文本保留其历史措辞 "menu / result page open (measurement queries blocked)"；现在它指的是结果页或查看器，而不是普通菜单。
+
+因此：客户端无法从查询结果看出菜单或面板是否打开，因为显示状态看起来相同。各拨盘位置上每个按键的作用以及哪些内容不可见，见 [UI.zh-CN.md](UI.zh-CN.md)（英文原文 [UI.md](UI.md)）。
+
+表笔报警，VERIFIED（2026-11-22，V1.71）。在 A 位置上 mA 与 A 插孔都没有插表笔（或两者都插了表笔），以及在 uA 位置上 A 插孔插有表笔时，万用表显示 "WARNING / Leads connected incorrectly."，软键标签被清空，背光被强制调亮，并忽略按键。其他每个位置都要求 mA 和 A 插孔为空，否则会出现同样的警告。通过协议什么也看不出来：实时数据包、QDDB、QM 和 QDDA 报告的都是正常的接近零的电流，状态为 NORMAL，这四者都不返回错误。通过协议观察到的只有 A 位置上两个电流插孔都没有插表笔的情形；其他情形只在万用表屏幕上核对过。在电流功能（`A_*`、`MA_*`、`UA_*`）中，HOLD、MINMAX 或 RANGE 没有改变任何东西，再加上接近零的读数，是唯一的线索。此时 `open289 press` 报告警告 `LEAD_ALERT_POSSIBLE`（另有 `KEY_IGNORED`），除非 REL 能解释被忽略的 RANGE，或正在运行的记录能解释被忽略的 MINMAX；在其他位置上它只报告 `KEY_IGNORED`。应请用户检查表笔连接。
 
 ### 6.10 PRESS 按键与屏幕状态机
 
-`PRESS <key>` 模拟一次按下；`PRESS <key>,HELD_DOWN` 模拟一次长按。回复只有 ack（`0`）。按键（来自万用表的 buttonName 表）：`F1 F2 F3 F4 UP DOWN LEFT RIGHT HOLD MINMAX RANGE INFO BACKLIGHT ONOFF`。已在硬件上 VERIFIED 的有：HOLD、MINMAX、RANGE（含长按）、BACKLIGHT、F2、F4，以及 ONOFF 后接 F1（关机）。F3、UP、DOWN、LEFT、RIGHT 和 INFO 未经实测。DERIVED（来自公开资料）：万用表表中的其他按压类型为 RELEASED 和 REPEATED。按键命令在屏幕变化之前就已返回，因此客户端应等待约一秒，再检查显示状态。open289 默认等待 1.0 秒。
+`PRESS <key>` 模拟一次按下；`PRESS <key>,HELD_DOWN` 模拟一次长按。回复只有 ack（`0`）。按键（来自万用表的 buttonName 表）：`F1 F2 F3 F4 UP DOWN LEFT RIGHT HOLD MINMAX RANGE INFO BACKLIGHT ONOFF`。已在硬件上 VERIFIED 的有：全部 14 个按键（HOLD、MINMAX、RANGE、BACKLIGHT、F2、F4，以及 ONOFF 后接 F1（关机），于 2026-11-06；F1、F3、UP、DOWN、LEFT、RIGHT 和 INFO，于 2026-11-22）。长按：RANGE 和 MINMAX（2026-11-06）；F2、F4、HOLD、MINMAX、BACKLIGHT、INFO，以及记录的 Trend 视图中的 LEFT/RIGHT（2026-11-22）。按拨盘位置划分的完整按键图（菜单、拒绝情形、操作步骤、哪些内容不可见；固件 V1.71 上观察所得）见 [UI.zh-CN.md](UI.zh-CN.md)（英文原文 [UI.md](UI.md)）。DERIVED（来自公开资料）：万用表表中的其他按压类型为 RELEASED 和 REPEATED。按键命令在屏幕变化之前就已返回，因此客户端应等待约一秒，再检查显示状态。open289 默认等待 1.0 秒。有些菜单选项（低通）需要超过 1 秒才生效；当最后一个键是没有改变任何东西的软键时，open289 会在再等一个稳定时间（至少 1 秒）后重新读取一次状态。
 
 在 289 上验证的效果（V DC 量程 5，自动）：
 
@@ -552,10 +556,12 @@ min/max 的屏幕状态机，VERIFIED。“Queries”指测量查询。
 |---|---|---|---|
 | 测量屏幕 | OK | `MINMAX` | MIN MAX 运行中 |
 | MIN MAX 运行中 | OK，模式 MIN_MAX_AVG | `MINMAX`（或长按） | 结果页 |
-| 结果页 | EXECUTION_ERROR | `F1` 重新开始；`F2` 保存；`MINMAX` 或 `F4` 关闭 | 再次运行；保存页；测量屏幕 |
-| 保存页（在结果页中用 F2 打开） | EXECUTION_ERROR | `F1` +名称（未实测）；`F2` Save；`F4` Close | 名称输入（未测试）；保存并停留在保存页；测量屏幕 |
+| 结果页（MIN MAX；Peak 结果页未检查） | EXECUTION_ERROR | `F1` 重新开始；`F2` 保存；`MINMAX` 或 `F4` 关闭 | 再次运行；保存页；测量屏幕（未保存的数值被丢弃） |
+| 保存页（在结果页中用 F2 打开） | EXECUTION_ERROR | `F1` +名称（未实测）；`F2` Save；`F4` Close | 名称输入（未测试）；保存，查询仍被阻塞（见下文）；结果页（2026-11-22，[UI.zh-CN.md](UI.zh-CN.md) 3.3） |
 
-在保存页上按 `F2`（Save）再按 `F4` 之后，QSLS 显示多了一个 min/max 条目（测试中 min/max 计数从 0 变为 1），且查询恢复工作。在保存页上按背光键没有任何可见变化。
+按 `F2`（Save）再按 `F4` 之后，QSLS 显示多了一个 min/max 条目（测试中 min/max 计数从 0 变为 1），且查询恢复工作（2026-11-06）。按 `F2` Save 之后万用表去了哪里没有记录：保存页和结果页都会阻塞查询。由于在保存页上按 `F4` Close 会回到结果页（2026-11-22），DERIVED：`F2` Save 很可能回到结果页，而随后的 `F4` 关闭的是结果页（模拟器即按此建模）。保存之后，按一次 `F4` 再读取状态，只要仍被阻塞就重复（UI.zh-CN.md 中的操作步骤“启动、停止并保存 MIN MAX”）。在保存页上按背光键没有任何可见变化。
+
+记录结果页（"Stopped" + "Recording"，2026-11-22，[UI.zh-CN.md](UI.zh-CN.md) 3.6），在记录结束或被停止时出现：EXECUTION_ERROR。`F2` Save 打开 Save 面板；`F3` Trend 打开 Trend 视图（同样被阻塞；在那里按 `F3` 回到摘要）；`F4` Close 关闭该页，并且除非已经保存，否则会丢弃该记录。`F1` 没有标签（没有 Restart）。
 
 ### 6.11 关机
 
@@ -604,6 +610,7 @@ DERIVED。这些表来自对多个固件世代的 287 和 289 万用表的公开
 | 切勿发送适配器操作码 `90` 到 `94`。 | 它们控制 1550/1555 测试仪上的高压绝缘测试。 |
 | 切勿在一次发送中向万用表发送超过 87 字节。 | 181 字节没有得到回复；373 字节或更多会使适配器挂死，直到断电重启。 |
 | 默认只传递查询命令（`ID`、`IM`、`Q...`）。 | `MP`、`CSD`（清除存储）和 `RI`（重置）会更改或擦除万用表状态。例外是 `PRESS`，仅限于列出的 14 个按键。 |
+| 在 A 和 uA 位置上（以及在任何可能有表笔插在 mA 或 A 插孔的位置上），不要把正常读数视为已证实。 | 表笔报警（6.9）会在万用表上显示警告、清空软键标签并忽略按键，但查询报告的仍是正常的接近零的电流（通过协议在 A 位置上观察到）。应请用户检查表笔。 |
 | 除非明确允许，否则屏蔽 `ONOFF`。 | 关机会中断通信，且无法远程撤销。万用表会要求确认。 |
 | 切勿接受非 ASCII 命令文本。 | 适配器原样转发字节，万用表的反应未定义。 |
 | 将 `OFF` 视为破坏性命令。 | 它会立即关闭万用表电源，不作询问。 |

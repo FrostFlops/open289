@@ -93,10 +93,13 @@ front-panel keys, `query` sends read-only remote commands (ID, IM, Q*), `selftes
 Values are in SI base units (V, A, ohm, F, Hz, s), `display` is the text the meter shows.
 The adapter accepts ONE connection: tools run one at a time, and while a background log runs every other meter tool
 returns BUSY until `log_stop` (BUSY also when another program, such as Fluke Connect or another open289, holds the
-adapter). METER_BUSY means a menu, setup or result page is open on the meter: close it on the meter (or with `press`)
-and retry. NOT_FOUND = the adapter is not advertising (press its button until the LED flashes green); DETACHED = no
+adapter). METER_BUSY means the meter shows a page that blocks queries (a MIN MAX / Peak / recording result page or a
+saved-item viewer): close it on the meter (or with `press`, usually F4) and retry. NOT_FOUND = the adapter is not advertising (press its button until the LED flashes green); DETACHED = no
 powered meter on the adapter. Safety: `press` changes the meter's state (HOLD, MIN MAX, range ...); ONOFF needs
 allow_off=true and switches the meter off for good (it cannot be switched on remotely, and the adapter sleeps too).
+Menus and the "Leads connected incorrectly" warning do not show in any reading: when `press` reports a soft key that
+changed nothing, or LEAD_ALERT_POSSIBLE, ask the user what the screen shows before pressing on. In current functions
+a near-zero reading can also mean the leads are in the wrong jacks (the warning page reads as ~0 A, state NORMAL).
 `query` is read-only: anything that could change or erase meter state is refused."""
 
 
@@ -126,7 +129,7 @@ TOOLS = [
      'description': 'One snapshot of the meter display: function (V_DC, OHMS ...), secondary function, range and '
                     'autorange, modes (HOLD, MIN_MAX_AVG, REL, RECORD ...), the primary reading and every other '
                     'reading on screen (MINIMUM, MAXIMUM, AVERAGE, SECONDARY, REL_REFERENCE ...). value is in SI '
-                    'base units, display is the text the meter shows. METER_BUSY = a menu or result page is open.',
+                    'base units, display is the text the meter shows. METER_BUSY = a result page or saved-item viewer is open.',
      'inputSchema': _schema({'max_wall': _wall(DEFAULT_WALL_S)}), 'annotations': {'readOnlyHint': True}},
     {'name': 'live', 'title': 'Real-time readings',
      'description': 'Collect real-time readings from the adapter (about 4 per second) for `count` readings or '
@@ -167,9 +170,18 @@ TOOLS = [
          'max_wall': _wall(RECORDING_WALL_S)}, ['index'])},
     {'name': 'press', 'title': 'Press meter keys',
      'description': 'Simulate front-panel keys in order (soft keys F1-F4 under the display, the arrows, HOLD, '
-                    'MINMAX, RANGE, INFO, BACKLIGHT, ONOFF) and return the display state after each key. held: a '
-                    'long press (RANGE held = back to autorange). ONOFF switches the meter OFF for good (it cannot '
-                    'be switched on remotely, and the adapter goes to sleep with it): it is refused unless '
+                    'MINMAX, RANGE, INFO, BACKLIGHT, ONOFF) and return the display state after each key, which '
+                    'state fields changed ("changed": [] = nothing visible, ["view"] = a result page or viewer '
+                    'opened or closed, null = cannot tell; autorange range moves are not counted) and a "note" '
+                    'when the effect is invisible or absent. '
+                    'Menus, panels, help pages and the lead-alert warning overlay the reading and are invisible '
+                    'here, and a refused menu choice silently leaves the menu open: after a soft key that changed '
+                    'nothing, ask the user what the screen shows before the next soft key (a blind F4 can open '
+                    'Setup). "warnings": KEY_IGNORED, LEAD_ALERT_POSSIBLE (current function, leads in the wrong '
+                    'jacks), MENU_STATE_UNKNOWN. Key map per dial position: '
+                    'https://github.com/FrostFlops/open289/blob/main/docs/UI.md. held: '
+                    'a long press (RANGE held = back to autorange). ONOFF switches the meter OFF for good (it '
+                    'cannot be switched on remotely, and the adapter goes to sleep with it): it is refused unless '
                     'allow_off is true; the meter then asks for confirmation (F1 confirms, F4 cancels).',
      'inputSchema': _schema({
          'keys': {'type': 'array', 'minItems': 1, 'maxItems': 20,
@@ -782,7 +794,7 @@ SELFTEST_HINTS = {'S01': 'the adapter is not advertising: press its button until
                          'Connect on any phone',
                   'S02': 'the adapter did not accept the connection: move closer, check that no phone is connected',
                   'S03': 'clip the adapter onto the meter IR port and switch the meter on',
-                  'S06': 'a menu or result page is open on the meter: close it, then run selftest again'}
+                  'S06': 'a result page or saved-item viewer is open on the meter: close it, then run selftest again'}
 
 
 # ------------------------------------------------------------------------------------------------ server
@@ -1150,8 +1162,11 @@ class Server:
                 st = _display(st, readings=False)
             if st is not None:
                 d['state'] = st
+            for k in ('changed', 'note'):
+                if k in p:
+                    d[k] = p[k]
             presses.append(d)
-        return {'ok': True, 'cmd': 'press', 'presses': presses}
+        return {'ok': True, 'cmd': 'press', 'presses': presses, 'warnings': res.final.get('warnings') or []}
 
     def tool_query(self, a, mid):
         cmds = a['commands']

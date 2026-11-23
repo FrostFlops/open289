@@ -248,7 +248,7 @@ peak        #0   'Save 3'         2026-11-06 21:29:01.471  V_DC  0.005 V DC
 recording   #0   'Save 4'         2026-11-06 21:40:19.248  V_DC  1.9874 V DC  72 records, interval 1 s, 1.0 min
 ```
 
-**记录下载。** `recording INDEX` 获取某个记录（万用表的 RECORD 模式）的趋势记录，每条记录写一行。它每次往返最多批量发出 8 个查询，在硬件上每条记录耗时 0.44 s（`--no-batch`：每次往返一个，约 1.4 s）。失败的记录会重试（最多再试 3 次）。如果万用表显示了菜单，下载会以 `METER_BUSY` 停止，并给出提示，说明从哪条记录继续；记录失败（`PROTOCOL_ERROR`）时同样如此。用相同的 `--out` 和 `--start K` 恢复：文件会被追加，不会再写第二个表头。`--limit K` 在记录 K 之前停止（是结束索引，不是数量）。事件：`started`，每 10 s 一次的 `progress`（`done`、`of`），以及 `done`（`records`、`duration_s`、`s_per_record`、`retries`、`file`）。
+**记录下载。** `recording INDEX` 获取某个记录（万用表的 RECORD 模式）的趋势记录，每条记录写一行。它每次往返最多批量发出 8 个查询，在硬件上每条记录耗时 0.44 s（`--no-batch`：每次往返一个，约 1.4 s）。失败的记录会重试（最多再试 3 次）。如果万用表显示了会阻塞查询的页面（结果页或已保存项目查看页），下载会以 `METER_BUSY` 停止，并给出提示，说明从哪条记录继续；记录失败（`PROTOCOL_ERROR`）时同样如此。用相同的 `--out` 和 `--start K` 恢复：文件会被追加，不会再写第二个表头。`--limit K` 在记录 K 之前停止（是结束索引，不是数量）。事件：`started`，每 10 s 一次的 `progress`（`done`、`of`），以及 `done`（`records`、`duration_s`、`s_per_record`、`retries`、`file`）。
 
 CSV 列（JSONL 的键相同）：`index`、`start`、`end`（万用表本地时间）、`unit`、`primary`、`primary_state`、`minimum`、`minimum_state`、`average`、`average_state`、`maximum`、`maximum_state`、`samples`、`record_type`（`INTERVAL`，……）、`stable`、`transient`。数值以 SI 基本单位表示；`_state` 为 `OL` 表示该值为空。
 
@@ -270,18 +270,36 @@ open289 press MINMAX F4               # stop it (opens the result page), then cl
 open289 press ONOFF F1 --allow-off    # switch the meter off for good
 ```
 
-选项：`--held` 对每个按键发送长按（`HELD_DOWN`）；`--settle S`（默认 1.0）在读回状态之前等待这么久；`--allow-off` 允许 ONOFF。结果的每个条目包含 `key`、`held`、`ack`（`OK`）和 `state`（一个显示快照；万用表显示页面时则是一段文字，见下）。`press` 在遇到第一个万用表未确认的按键时停止。`press` 是唯一会改变万用表状态的命令（`raw --unsafe` 除外）。
+选项：`--held` 对每个按键发送长按（`HELD_DOWN`）；`--settle S`（默认 1.0）在读回状态之前等待这么久；`--allow-off` 允许 ONOFF。结果的每个条目包含 `key`、`held`、`ack`（`OK`）和 `state`（一个显示快照；万用表显示会阻塞查询的页面或链路已断开时，则是一段文字，见下）。`press` 在遇到第一个万用表未确认的按键时停止。`press` 是唯一会改变万用表状态的命令（`raw --unsafe` 除外）。
 
 ```
 $ open289 --sim press HOLD
-{"ok":true,"cmd":"press","presses":[{"key":"HOLD","held":false,"ack":"OK","state":{"function":"V_DC","secondary_function":"NONE","autorange":true,"range":5.0,"unit":"VDC","modes":[],...}}]}
+{"ok":true,"cmd":"press","presses":[{"key":"HOLD","held":false,"ack":"OK","state":{"function":"V_DC","secondary_function":"NONE","autorange":true,"range":5.0,"unit":"VDC","modes":["HOLD"],...},"changed":["modes"]}],"warnings":[]}
 ```
+
+**发生了什么变化。** 在第一个按键之前，`press` 会先读一次显示状态（`QDDB`）作为基线，每个按键之后（等待 `--settle` 后）再读一次。因此每个条目还包含：
+
+- `changed`：与按键前相比有差异的显示状态字段，范围是 `function`、`secondary_function`、`autorange`、`range`、`unit`、`modes`、`minmax_start`，以及两侧都带有读数时的 `db_ref` 和 `temp_offset`。`[]` 表示没有可见变化；`["view"]` 表示一个会阻塞查询的页面（结果页、已保存项目查看页）被打开或关闭；`null` 表示无法判断（两侧都被阻塞，或某一侧未知；ONOFF、关机和链路断开的条目总是 `null`，ONOFF 之后的那个按键也是）。在自动量程下，由输入引起的量程变化不计入。
+- `note`（仅在需要时出现）：状态看不出变化时，按键大概做了什么，例如：软键没有可见变化（菜单或面板可能已打开、移动或关闭，或某个选项被拒绝：在下一个软键之前先看一看，盲按 F4 可能打开 Setup）；F2 Save 把 HOLD 打开（Save 面板会保持读数）；UP/DOWN 没有变化（光标或数值，或 LCD 对比度，已保存项目查看页中也是如此）；LEFT/RIGHT；INFO（帮助不可见，F4 关闭它）；AutoHOLD 下的 HOLD（取一个新的保持值，仍处于 AutoHOLD）；HOLD、MINMAX 或 RANGE 没有任何变化（被忽略：在此功能或模式下不可用，或有阻塞按键的页面，例如表笔警告）。自动量程下长按 RANGE 不会被标记。
+- 顶层 `warnings`，元素为 `{code, message}`：`KEY_IGNORED`（某个 HOLD、MINMAX 或 RANGE 没有效果）、`LEAD_ALERT_POSSIBLE`（电流功能 `A_*`、`MA_*`、`UA_*` 下出现这样被忽略的按键，除非 REL 能解释被忽略的 RANGE，或正在进行的记录能解释被忽略的 MINMAX；见下面的表笔警告）、`MENU_STATE_UNKNOWN`（最后一个可能关闭菜单的按键是没有变化的软键或打开了 Save 面板，因此菜单可能仍然开着）。
+
+如果最后一个按键是软键且没有任何变化，`press` 会再等一个 settle 周期（至少 1 s）后重读一次再下结论（有些选项，如低通，耗时超过 1 s）。如果序列中途链路断开，`press` 停止，并保留此前已完成的按键；最后一个条目的状态为 `link closed (meter switched off, or the adapter went out of range)`，如果按键本身未能发出，则 ack 为 `LINK_CLOSED`、状态为 `meter powering off`。这些字段是新增的。`--text` 会输出 `changed: ...`（或 `nothing` / `unknown`）、`note:` 和 `WARNING CODE: message` 行。
+
+```
+$ open289 --sim press F4
+{"ok":true,"cmd":"press","presses":[{"key":"F4","held":false,"ack":"OK","state":{...},"changed":[],"note":"display state unchanged: a menu or panel may have opened, ..."}],"warnings":[{"code":"MENU_STATE_UNKNOWN","message":"a soft key left the display state unchanged ..."}]}
+```
+
+**表笔警告：一个盲区。** 在 A 档且 mA 或 A 插孔都没有表笔（或两个插孔都插了表笔）时，以及在 uA 档且 A 插孔插了表笔时，万用表会显示 `WARNING / Leads connected incorrectly.`，熄灭软键标签，强制背光调到最亮，并忽略按键。通过协议完全看不出来：实时数据包、`QDDB`、`QM` 和 `QDDA` 都报告一个正常的接近零的电流，状态为 `NORMAL`（通过协议只观察过 A 档完全没插表笔的情况；其他情形是在万用表屏幕上看到的）。除 A 和 uA 之外的每个档位都要求 mA 和 A 插孔空着。当电流读数可疑或按键被忽略时，智能体必须请用户检查表笔。
+
+[docs/UI.zh-CN.md](docs/UI.zh-CN.md)（[English](docs/UI.md)）是按旋钮档位划分的按键图（每个键做什么、菜单、拒绝情形、操作示例、哪些看不见），基于固件 V1.71 观察所得。
 
 在硬件上观察到的现象：
 
 - `HELD_DOWN` 是长按。长按 `RANGE` = 回到自动量程。长按 `MINMAX` 的效果与短按相同。
 - **MIN MAX 有页面。** 第一次 `MINMAX` 启动 MIN MAX（`modes` 中有 `MIN_MAX_AVG`）。第二次停止它并打开**结果页**（F1 重新开始，F2 保存，`MINMAX` 或 F4 关闭）。在结果页按 F2 会打开**保存页**（F1 追加名称字符，F2 保存，F4 关闭）。关闭页面会回到测量屏幕。
-- **为什么此时查询会返回 `METER_BUSY`。** 当菜单、结果页、保存页或设置屏幕打开时，万用表会以执行错误应答每一个测量查询（`QDDB`、`QSLS`，……）。open289 把它命名为 `METER_BUSY`（退出码 5）。此时 `press` 会显示 `"state": "menu / result page open (measurement queries blocked)"`。请用按键（`F4`）或在万用表上关闭该页面，然后重试。
+- **菜单不会阻塞查询。** 菜单、Save 面板、View Memory / Delete Memory 列表、Setup 面板及其各页，以及 INFO 帮助都只是叠在读数之上，`QDDB` 仍像在测量屏幕上一样应答（Save 面板打开时 HOLD 为开）。已在固件 V1.71 上验证。
+- **为什么查询会返回 `METER_BUSY`。** 在已保存项目查看页（View Mem）、MIN MAX 和记录的结果页（Peak 结果页未检查）、从结果页打开的保存页、关机确认，以及换档的短暂期间，万用表会以执行错误应答测量查询（`QDDB`、`QSLS`，……）。open289 把它命名为 `METER_BUSY`（退出码 5）。此时 `press` 会显示 `"state": "menu / result page open (measurement queries blocked)"`（沿用的历史措辞，实际指结果页或查看页）。请用按键（通常是 `F4`）或在万用表上关闭该页面，然后重试。
 - `BACKLIGHT` 循环切换关闭、明亮、昏暗，在各页面中同样有效。
 - `ONOFF` 会被拒绝（`UNSAFE_OPERATION`，退出码 7），除非加 `--allow-off`。加上之后，万用表会请求确认（`turning off meter will break communication`）：`F1` 确认，`F4` 取消。按下 F1 之后万用表关机，适配器稍后也会自行关机，两者都无法远程开机。这在电脑上无法撤销。
 
@@ -310,7 +328,7 @@ $ open289 --sim raw MP
 | S03 | 万用表已连接（`FLUKE 287/289`，而不是未连接时的 `FLUKE PC3000`） |
 | S04 | 适配器固件有应答 |
 | S05 | 透传 `ID` |
-| S06 | 显示快照（`QDDB`）可解码（万用表必须处于测量屏幕） |
+| S06 | 显示快照（`QDDB`）可解码（结果页或已保存项目查看页打开时失败；菜单和 Setup 不影响） |
 | S07 | 5 s 内收到一个实时读数 |
 | S08 | 适配器电量 >= 20 % |
 | S09 | 万用表电量不是 EMPTY / ALMOST_EMPTY |
@@ -380,7 +398,7 @@ python -m open289.sim audit [--clear]                 # every GATT write the too
 错误是一个对象加非零退出码：
 
 ```
-{"ok":false,"cmd":"read","error":{"code":"METER_BUSY","message":"'QDDB' -> EXECUTION_ERROR","hint":"the meter is on a menu, result page or setup screen: close it on the meter (or with open289 press), then retry"}}
+{"ok":false,"cmd":"read","error":{"code":"METER_BUSY","message":"'QDDB' -> EXECUTION_ERROR","hint":"the meter shows a page that blocks queries (a MIN MAX / Peak / recording result page or a saved-item viewer): close it on the meter (or with open289 press, usually F4), then retry"}}
 ```
 
 `--text` 输出同样数据的人类可读形式：`live` 每个读数一行（`HH:MM:SS.mmm  value unit`，副读数跟在 `|` 之后），`read`、`memory`、`press` 和 `selftest` 是简短的表格，`recording` 每条记录一行，`log` 是简短的摘要。`--text` 下的错误是 `error CODE: message` 加一行 `hint:`。脚本和智能体应使用 JSON。
@@ -394,7 +412,7 @@ python -m open289.sim audit [--clear]                 # every GATT write the too
 | `INVALID_ARG` | 2 | 参数无法解析或超出范围（时长、按键、索引）：修正命令 |
 | `NOT_FOUND` | 3 | 没有 IR3000 FC 在广播：唤醒适配器（按按钮直到 LED 闪绿灯），靠近一些，关闭手机上的 Fluke Connect |
 | `BUSY` | 4 | 另一个 open289 进程占用了适配器（等待，或 `open289 stop`）；在 MCP 服务器中还可能是正在运行的后台记录 |
-| `METER_BUSY` | 5 | 万用表应答 EXECUTION_ERROR：菜单、结果页、保存页或设置屏幕处于打开状态；在万用表上或用 `press F4` 关闭它 |
+| `METER_BUSY` | 5 | 万用表应答 EXECUTION_ERROR：结果页（MIN MAX、记录）、已保存项目查看页或关机确认处于打开状态；在万用表上或用 `press F4` 关闭它 |
 | `DETACHED` | 5 | 适配器报告没有通电的万用表（据 Fluke 应用，此时它会报告 `FLUKE PC3000`；在硬件上未观察到）：把它装到红外口上，打开万用表 |
 | `NO_DATA` | 5 | 万用表没有该请求对应的数据，例如没有该索引的已保存条目：检查 `memory` |
 | `TIMEOUT` | 6 | 一次性命令超过了 `--max-wall`，或 `--timeout` 秒内没有读数：靠近一些，检查万用表是否开机，调大 `--max-wall` |
@@ -428,7 +446,7 @@ claude mcp add open289 -- open289-mcp
 | `live` | `live` | `count`（20，1..400）、`seconds`（0.1..120；与 `count` 同时给出时：以先到者为准）、`max_wall`。返回的是**摘要**而不是逐行读数：数量、速率、首 / 末时间、每种单位主读数的 min / max / mean、出现过的功能和单位、最后 5 个读数 |
 | `memory` | `memory` | `max_wall`（600）。各类计数和每个已保存条目 |
 | `download_recording` | `recording` | `index`（必填）、`out`、`format`、`start`（0）、`limit`、`max_wall`（900）。返回文件、记录数、每条记录的秒数、重试次数、记录头。失败的结果带有 `resume`，给出继续下载所用的 `start` 和 `out` |
-| `press` | `press` | `keys`（必填，1..20 个，取自 `F1 F2 F3 F4 UP DOWN LEFT RIGHT HOLD MINMAX RANGE INFO BACKLIGHT ONOFF`）、`held`（false）、`allow_off`（false）、`max_wall`。每次按键之后的显示状态 |
+| `press` | `press` | `keys`（必填，1..20 个，取自 `F1 F2 F3 F4 UP DOWN LEFT RIGHT HOLD MINMAX RANGE INFO BACKLIGHT ONOFF`）、`held`（false）、`allow_off`（false）、`max_wall`。每次按键之后的显示状态，带 `changed` 和 `note`，以及顶层 `warnings`（`KEY_IGNORED`、`LEAD_ALERT_POSSIBLE`、`MENU_STATE_UNKNOWN`），与 CLI 相同 |
 | `query` | `raw` | `commands`（必填，1..10 个，例如 `["ID","QM"]`）、`max_wall`。只读：`ID`、`IM`、`Q*`；其他任何命令在到达万用表之前就会以 `UNSAFE_OPERATION` 拒绝（MCP 中没有 `--unsafe`） |
 | `selftest` | `selftest` | `max_wall`。检查项 S01-S09；失败时返回 `SELFTEST_FAILED` 及失败的检查项 |
 | `log_start` | 后台运行的 `log` | `duration`（`10m`；`forever` = 直到 `log_stop`；必须 > 0）、`every`（`0`）、`snapshot_every`（`0`）、`out`、`format`、`reconnect_for`（`5m`）。返回任务 id 和文件 |
@@ -439,7 +457,7 @@ claude mcp add open289 -- open289-mcp
 
 **后台记录。** `log_start` 会立即返回（在第一个读数之后，最长 30 s），并给出任务 id；客户端断开连接后记录仍会继续运行，其输出和元数据保存在 `state/mcp_jobs/<job>/` 中，因此重启后的服务器或其他客户端的服务器仍能看到它。用 `log_status` 跟踪它，用 `log_stop` 结束它（或者它在 `duration` 之后结束，或者在链路丢失超过 `reconnect_for` 时结束）。文件中保存数据；工具结果是摘要，绝不会是成百上千个读数。
 
-**BUSY 规则。** 适配器只接受一个连接，因此工具一次只运行一个，并且**在后台记录运行期间，其他所有万用表工具（`status`、`read`、`live`、`memory`、`press`、`query`，……）都会返回 `BUSY`**，直到 `log_stop`（`log_status` 和 `log_stop` 仍可使用）。`BUSY` 也表示另一个 open289（在终端中运行 `live`/`log`，或另一个客户端）占用着适配器。手机上的 Fluke Connect 表现为 `NOT_FOUND`（适配器停止广播）。`METER_BUSY` 则不同：万用表上打开了菜单或结果页；用 `press` `F4` 关闭后重试。对智能体的安全提示：`press` 会改变万用表（HOLD、MIN MAX、量程）；`ONOFF` 需要 `allow_off: true`，并且只应在用户要求时使用：它会让万用表彻底关机，适配器也会随之休眠。
+**BUSY 规则。** 适配器只接受一个连接，因此工具一次只运行一个，并且**在后台记录运行期间，其他所有万用表工具（`status`、`read`、`live`、`memory`、`press`、`query`，……）都会返回 `BUSY`**，直到 `log_stop`（`log_status` 和 `log_stop` 仍可使用）。`BUSY` 也表示另一个 open289（在终端中运行 `live`/`log`，或另一个客户端）占用着适配器。手机上的 Fluke Connect 表现为 `NOT_FOUND`（适配器停止广播）。`METER_BUSY` 则不同：万用表上打开了会阻塞查询的页面（结果页或已保存项目查看页；菜单和 Setup 不会）；用 `press` `F4` 关闭后重试。对智能体的安全提示：`press` 会改变万用表（HOLD、MIN MAX、量程）；`ONOFF` 需要 `allow_off: true`，并且只应在用户要求时使用：它会让万用表彻底关机，适配器也会随之休眠。
 
 没有 MCP 工具的 CLI 命令：`scan`（服务器自己查找适配器）、`stop`（由 `log_stop` 在内部使用）以及 `raw --unsafe`（有意不暴露）。有 shell 的智能体可以用 CLI 完成所有这些操作。
 
@@ -459,6 +477,7 @@ open289 把文件保存在一个带有两个子文件夹的文件夹中：
 - `open289/` 包：`cli.py`（命令、输出）、`transport.py`（真实或虚拟后端的选择、发现、连接）、`adapter.py`（IR3000 服务客户端、透传、操作码白名单、查询过滤和 87 字节限制）、`meter.py`（万用表的远程命令和二进制记录解码器）、`reading.py`（实时通知解码器）、`records.py`（可直接转 JSON 的字典）、`logger.py`（带重连的长时间记录）、`lock.py`（单客户端锁）、`errors.py`、`paths.py`、`sim.py`（虚拟万用表）和 `mcp_server.py`（MCP 服务器）。
 - `tests/` 针对虚拟万用表的离线测试：解码器（对照真实抓包）、传输层及其安全规则、CLI、MCP 服务器（JSON-RPC、任务、BUSY 规则）以及模拟器本身。
 - `docs/PROTOCOL.md`（以及 `PROTOCOL.zh-CN.md`）：协议，附证据等级。
+- `docs/UI.md`（以及 `UI.zh-CN.md`）：按旋钮档位划分的前面板按键图，基于固件 V1.71 观察所得。
 - `tools/` 硬件诊断脚本。
 - `.github/workflows/`：`ci.yml` 和 `release.yml`。
 

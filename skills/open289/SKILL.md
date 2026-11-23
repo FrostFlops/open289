@@ -38,9 +38,23 @@ Durations are `30s`, `5m`, `1.5h`, `2d` or `forever`. Every command first waits 
 - Meter on, adapter clipped onto its IR port. `DETACHED` (exit 5) = the adapter sees no powered meter.
 - First command in a session: `open289 info` (adapter, meter model, firmware, serial, batteries, memory level, meter
   clock, saved counts) or `open289 selftest` (9 read-only checks, see below).
-- `METER_BUSY` (exit 5): the meter has a menu, setup page, MIN MAX result page or save dialog open, and it refuses
-  measurement queries. Do NOT guess key presses: ask the user what the meter screen shows, then close it on the meter
-  or with `press` (on the MIN MAX result page `MINMAX` or `F4` closes it).
+- `METER_BUSY` (exit 5): the meter shows a page that blocks queries: a MIN MAX or recording result page (probably
+  also the Peak result page, not checked), a saved-item viewer (View Mem), the save page opened from a result page,
+  the power-off confirmation, or briefly a dial change. The Menu, the Save panel (the meter is in HOLD while it is
+  open), the View Memory and Delete Memory lists, the Setup panel and its pages and the INFO help do NOT block
+  queries: QDDB answers as on the measurement screen (verified on V1.71). Do NOT guess key presses: ask the user what
+  the meter screen shows, then close it on the meter or with `press` (usually `F4`; on the MIN MAX result page
+  `MINMAX` also closes it). F4 Close (or MINMAX) on a MIN MAX or recording result page discards the unsaved result:
+  ask the user whether to save it first (F2 Save, only when asked).
+- Lead alert: on the A position with no lead in the mA or A jack (or leads in both), and on uA with a lead in the A
+  jack, the meter shows "Leads connected incorrectly.", blanks the soft keys and ignores keys, but over the protocol
+  nothing shows: readings look normal (near-zero current, state `NORMAL`). In a current function (`A_`, `MA_`, `UA_`) a
+  near-zero reading, or keys that do nothing, may mean wrong jacks: ask the user to check the leads. Every other dial
+  position wants the mA and A jacks empty: there a lead in the mA or A jack raises the same warning and keys are
+  ignored. `press` then reports only `KEY_IGNORED` (`LEAD_ALERT_POSSIBLE` is limited to current functions), so ask
+  the user to check the jacks after any `KEY_IGNORED` you cannot explain.
+- Per-position key map (what each key does, menus, refusals, recipes, what is invisible): `docs/UI.md` in a checkout
+  (online: https://github.com/FrostFlops/open289/blob/main/docs/UI.md). Read it before pressing keys other than HOLD / MINMAX / RANGE.
 - Turning the meter off cannot be undone remotely (nothing can switch the meter or the adapter back on). Never
   `press ONOFF` or `raw --unsafe OFF` without the user's explicit OK.
 - Verified on hardware (2026-11-06): IR3000 FC radio fw 01.00.01 / MSP 01.00.15, Fluke 289 fw V1.71, Windows 11 (Intel
@@ -59,7 +73,7 @@ work, release per call) and returns a compact summary; errors carry the same cod
 | `live` | `live` | summary instead of lines: count, rate, min/max/mean per unit, last 5 readings; `count` (1-400, default 20) and/or `seconds` (0.1-120) |
 | `memory` | `memory` | saved items; slow (every item is one query, up to 600 s) |
 | `download_recording` | `recording INDEX` | `index`, `out`, `format`, `start`, `limit`; a failed result has a `resume` block (index, start, out) |
-| `press` | `press` | `keys` (list, max 20, case-insensitive), `held`, `allow_off`; returns the display state after each key |
+| `press` | `press` | `keys` (list, max 20, case-insensitive), `held`, `allow_off`; returns the display state after each key, plus `changed`, `note` and `warnings` (below) |
 | `query` | `raw` | read-only: ID, IM, Q* only; max 10 commands; no `unsafe` option |
 | `selftest` | `selftest` | read-only health check |
 | `log_start` / `log_status` / `log_stop` | `log` / (job output) / `stop` | background job (below) |
@@ -114,18 +128,46 @@ Notes:
 ## Keys and the screen state machine
 `open289 press KEY [KEY ...]` (keys: F1 F2 F3 F4 UP DOWN LEFT RIGHT HOLD MINMAX RANGE INFO BACKLIGHT ONOFF; `--held` =
 long press; `--settle S` waits before reading the state back, default 1 s). It returns, per key, `ack` and the display
-state afterwards. Keys press in order, so a menu path is one call, but check the state each time (`press` returns it).
+state afterwards. Keys press in order, but menus, panels, cursors and the help do not show in the state (`docs/UI.md`
+section 2). Send soft keys one at a time and read `changed` / `note` / `warnings` before the next one. Never send a
+menu path blind.
 - `HOLD` toggles HOLD (the reading freezes; `modes` contains `HOLD`). Press it again to release. It does not change
   what the meter measures.
 - `MINMAX` starts MIN MAX AVG recording. Pressing it again stops it and opens the RESULT PAGE (F1 restart, F2 save, F4
-  or MINMAX closes). While this page, any menu or a save dialog is open, queries answer `METER_BUSY`. F2 on the result
-  page opens a save page (F1 add name, F2 Save, F4 Close). Saving writes into the meter's memory: only when the user
-  asked.
+  or MINMAX closes). While this page or the save page opened from it is open, queries answer `METER_BUSY`. F2 on the
+  result page opens a save page (F1 add name, F2 Save, F4 Close). Saving writes into the meter's memory: only when the
+  user asked.
 - `RANGE`: the first press leaves autorange and keeps the current range; each further press steps it; `RANGE --held` returns to autorange.
 - `BACKLIGHT` cycles off, bright, dim. `INFO` and the soft keys F1-F4 act as on the meter, depending on the screen.
-- The key presses change the meter, and `read` shows the effect. Never press keys to "see what happens". Ask the user
+- The key presses change the meter. `read` shows the effect only when the key changes function, range, unit or modes
+  (or opens or closes a result page or viewer). Menus, panels, Setup values, cursors, the help and the lead alert are
+  invisible (`docs/UI.md` section 2). Never press keys to "see what happens". Ask the user
   before anything that changes the measurement state they did not request (a key changes the meter's modes; the
   rotary dial cannot be turned remotely).
+- Result fields (additive). `press` reads the display state before the first key and after each key (after
+  `--settle`). Per key, `changed` lists the state fields that differ (function, secondary_function, autorange, range,
+  unit, modes, minmax_start, plus db_ref and temp_offset when both states carry those readings): `[]` = nothing
+  visible changed; `["view"]` = a blocking page (result page, saved-item viewer) opened or closed; `null` = cannot
+  tell (also on ONOFF / power-off / `LINK_CLOSED`). In autorange a range move caused by the input is not counted
+  (range is compared only when not in autorange on both sides). `note` appears only when needed: a soft key with no
+  visible change (a menu may have opened, moved or closed, or a choice was refused: look before the next soft key, a
+  blind F4 can open Setup); a soft key that switched HOLD on (normally F2 Save opening the Save panel, which holds the
+  reading and remembers its cursor: a second F2 stores a reading only when the cursor is on Save); UP/DOWN with no
+  change (cursor or value, or LCD contrast on screens without a cursor, including the saved-item viewers);
+  LEFT/RIGHT; INFO (help is invisible, F4 closes it); HOLD in AutoHOLD (takes a new value, stays in AutoHOLD);
+  HOLD/MINMAX/RANGE that changed nothing (ignored: not available here, or a page blocks keys such as the lead alert).
+  RANGE held in autorange is not flagged. If the last key is a soft key and nothing changed, `press` waits one more
+  settle period and reads again.
+- Top-level `warnings` is a list of `{code, message}`: `KEY_IGNORED` (a HOLD/MINMAX/RANGE was ignored; HOLD in
+  AutoHOLD and RANGE held in autorange do not count); `LEAD_ALERT_POSSIBLE` (such an ignored key in a current
+  function, `A_`/`MA_`/`UA_`, unless REL explains an ignored RANGE or a running recording an ignored MINMAX: ask the
+  user to check the leads and jacks); `MENU_STATE_UNKNOWN` (the last key other than UP/DOWN/LEFT/RIGHT/INFO/BACKLIGHT
+  was a soft key that changed nothing or opened the Save panel: ask the user what the screen shows before the next
+  soft key). Act on them; do not repeat the key blindly.
+- If the link drops mid-sequence, `press` stops and keeps the presses made so far. The entry of that key gets the state
+  "link closed (meter switched off, or the adapter went out of range)", or `ack` `LINK_CLOSED` with the state "meter
+  powering off" when the key itself could not be sent (also without ONOFF). The state text "menu / result page open
+  (measurement queries blocked)" means a result page or viewer, not a plain menu.
 - `ONOFF` is refused unless `--allow-off` (MCP `allow_off`); the meter then shows "turning off meter will break
   communication" and F1 confirms, F4 cancels. Switching off cannot be undone remotely (see Safety).
 
@@ -175,7 +217,7 @@ until power-cycled. Pass-through costs about 1.3 s per command.
 | `INVALID_ARG` (2) | bad option or value | fix the command (`error.hint` has the format) |
 | `NOT_FOUND` (3) | no IR3000 FC advertising | ask the user to press the adapter button until the LED flashes green, close Fluke Connect on phones, move closer; `open289 scan` lists adapters |
 | `BUSY` (4) | another open289 process or a running log/live holds the adapter (Fluke Connect on a phone shows up as NOT_FOUND) | wait, or `open289 stop`; close Fluke Connect; do not kill processes |
-| `METER_BUSY` (5) | menu / result / save page open on the meter | ask the user what the screen shows, then close it |
+| `METER_BUSY` (5) | a result page, saved-item viewer or save page open on the meter (plain menus and Setup do not block) | ask the user what the screen shows, then close it (usually F4; on a result page this discards an unsaved result, so ask about saving first) |
 | `DETACHED` (5) | adapter not attached to a powered meter | ask the user: meter on, adapter clipped on |
 | `NO_DATA` (5) | the meter has no data for that request (e.g. empty memory item) | not an error in the setup; report it |
 | `TIMEOUT`, `BLE_ERROR`, `LINK_LOST`, `PROTOCOL_ERROR`, `WRITE_FAILED`, `METER_ERROR` (6) | link or protocol problem | retry once; then wake the adapter again (button), move closer, run `selftest`; a `log` retries for `--reconnect-for` (default 5m) after a lost link, then ends with `stopped_by: "link_lost"`; resume a recording with `--start` |
@@ -189,13 +231,13 @@ adapter is disconnected cleanly.
 advertising, S02 connect and arm the control point, S03 meter attached, S04 adapter firmware answers, S05 pass-through
 ID, S06 display snapshot decodes, S07 a live reading within 5 s, S08 adapter battery (>= 20 %), S09 meter battery. About
 a few seconds. Result: `passed`, `failed`, `items[]` (`id`, `name`, `pass`, `measured`, `expected`). A failure of S01-S03
-is the adapter or the link, S06 usually METER_BUSY (a page is open), S08/S09 batteries. Run it whenever something looks off.
+is the adapter or the link, S06 usually METER_BUSY (a result page or saved-item viewer is open; menus do not block), S08/S09 batteries. Run it whenever something looks off.
 
 ## Try it without hardware
 `open289 --sim <cmd>` (or env `OPEN289_SIM=1`) runs everything against a virtual IR3000 FC and Fluke 289 (address
 `FA:28:90:00:00:01`, serial `12345678`, a V DC signal near 5 V, two saved measurements, one peak session, one 72-record
 trend recording). It models the GATT table, the out-buffer overflow and hang (open289 refuses sends over 87 bytes itself), the meter's key behaviour (HOLD, MIN MAX
-and its result page, menus giving `METER_BUSY`, power off), the adapter's single connection and the ~4 Hz live packets.
+and its result page giving `METER_BUSY`, power off), the adapter's single connection and the ~4 Hz live packets.
 Its state is a JSON file shared between commands; control it with `python -m open289.sim reset | show | power-cycle |
 set key=value ... | audit [--clear]` (for example reset after a `press HOLD`, or power-cycle to try the
 off / reconnect paths). Use `--sim` to test a command line or a parser before touching the real meter, and use
